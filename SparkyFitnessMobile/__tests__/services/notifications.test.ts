@@ -10,6 +10,7 @@ import {
   initNotifications,
   scheduleRestNotification,
 } from '../../src/services/notifications';
+import { setSoundsEnabled } from '../../src/services/sounds';
 
 const mockGetPerms = Notifications.getPermissionsAsync as jest.MockedFunction<
   typeof Notifications.getPermissionsAsync
@@ -32,7 +33,7 @@ const mockSetChannel = Notifications.setNotificationChannelAsync as jest.MockedF
 const mockToastShow = Toast.show as jest.MockedFunction<typeof Toast.show>;
 
 describe('notifications service', () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     __resetNotificationStateForTests();
     mockGetPerms.mockReset().mockResolvedValue({ status: 'granted' } as any);
     mockRequestPerms.mockReset().mockResolvedValue({ status: 'granted' } as any);
@@ -42,6 +43,9 @@ describe('notifications service', () => {
     mockSetChannel.mockClear();
     mockToastShow.mockClear();
     Object.defineProperty(Platform, 'OS', { get: () => 'ios', configurable: true });
+    // Reset the sounds toggle to its default (enabled) so each test starts
+    // from a known state regardless of mutations elsewhere in the suite.
+    await setSoundsEnabled(true);
   });
 
   describe('initNotifications', () => {
@@ -62,9 +66,34 @@ describe('notifications service', () => {
       );
     });
 
+    it('creates a silent sibling Android channel for the sounds-off state', async () => {
+      Object.defineProperty(Platform, 'OS', { get: () => 'android', configurable: true });
+      await initNotifications();
+      expect(mockSetChannel).toHaveBeenCalledWith(
+        'workout-timer-silent',
+        expect.objectContaining({
+          importance: Notifications.AndroidImportance.HIGH,
+          sound: null,
+        }),
+      );
+    });
+
     it('does not create an Android channel on iOS', async () => {
       await initNotifications();
       expect(mockSetChannel).not.toHaveBeenCalled();
+    });
+
+    it('handler reflects the live sounds toggle for foreground delivery', async () => {
+      await initNotifications();
+      const handler = mockSetHandler.mock.calls[0][0]!;
+
+      await setSoundsEnabled(true);
+      let result = await handler.handleNotification({} as any);
+      expect(result.shouldPlaySound).toBe(true);
+
+      await setSoundsEnabled(false);
+      result = await handler.handleNotification({} as any);
+      expect(result.shouldPlaySound).toBe(false);
     });
   });
 
@@ -113,6 +142,32 @@ describe('notifications service', () => {
         trigger: expect.objectContaining({
           type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
           seconds: 60,
+          channelId: 'workout-timer',
+        }),
+      });
+    });
+
+    it('routes to the silent channel and sets content.sound=false when sounds are off', async () => {
+      await setSoundsEnabled(false);
+      mockGetPerms.mockResolvedValue({ status: 'granted' } as any);
+      mockSchedule.mockResolvedValue('mock-id' as any);
+      await scheduleRestNotification('Squat', 90);
+      expect(mockSchedule).toHaveBeenCalledWith({
+        content: expect.objectContaining({ sound: false }),
+        trigger: expect.objectContaining({
+          channelId: 'workout-timer-silent',
+        }),
+      });
+    });
+
+    it('routes to the default channel and sets content.sound=true when sounds are on', async () => {
+      await setSoundsEnabled(true);
+      mockGetPerms.mockResolvedValue({ status: 'granted' } as any);
+      mockSchedule.mockResolvedValue('mock-id' as any);
+      await scheduleRestNotification('Deadlift', 120);
+      expect(mockSchedule).toHaveBeenCalledWith({
+        content: expect.objectContaining({ sound: true }),
+        trigger: expect.objectContaining({
           channelId: 'workout-timer',
         }),
       });

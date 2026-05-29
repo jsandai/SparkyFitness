@@ -3,8 +3,10 @@ import * as Notifications from 'expo-notifications';
 import Toast from 'react-native-toast-message';
 import { addLog } from './LogService';
 import { fireSuccessHaptic } from './haptics';
+import { getSoundsEnabled } from './sounds';
 
 const CHANNEL_ID = 'workout-timer';
+const CHANNEL_ID_SILENT = 'workout-timer-silent';
 
 let initialized = false;
 let hasShownDeniedToast = false;
@@ -18,16 +20,25 @@ export async function initNotifications(): Promise<void> {
       handleNotification: async () => ({
         shouldShowBanner: false,
         shouldShowList: false,
-        shouldPlaySound: true,
+        shouldPlaySound: getSoundsEnabled(),
         shouldSetBadge: false,
       }),
     });
 
     if (Platform.OS === 'android') {
+      // Android channels are immutable after creation, so we register two:
+      // one with the default channel sound, one silenced. scheduleRestNotification
+      // picks the right channelId at scheduling time based on the user toggle.
       await Notifications.setNotificationChannelAsync(CHANNEL_ID, {
         name: 'Workout timer',
         importance: Notifications.AndroidImportance.HIGH,
         enableVibrate: true,
+      });
+      await Notifications.setNotificationChannelAsync(CHANNEL_ID_SILENT, {
+        name: 'Workout timer (silent)',
+        importance: Notifications.AndroidImportance.HIGH,
+        enableVibrate: true,
+        sound: null,
       });
     }
   } catch (err) {
@@ -66,17 +77,18 @@ export async function scheduleRestNotification(
   const granted = await ensureNotificationPermission();
   if (!granted) return null;
 
+  const soundOn = getSoundsEnabled();
   try {
     const id = await Notifications.scheduleNotificationAsync({
       content: {
         title: 'Rest complete',
         body: exerciseName,
-        sound: true,
+        sound: soundOn,
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
         seconds,
-        channelId: CHANNEL_ID,
+        channelId: soundOn ? CHANNEL_ID : CHANNEL_ID_SILENT,
       },
     });
     return id;

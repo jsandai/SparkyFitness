@@ -32,6 +32,7 @@ import {
   hasSeenFoodPhotoIntro,
   markFoodPhotoIntroSeen,
 } from '../services/foodPhotoIntro';
+import { useSoundsEnabled } from '../services/sounds';
 
 type FoodScanScreenProps = RootStackScreenProps<'FoodScan'>;
 
@@ -62,6 +63,7 @@ const FoodScanScreen: React.FC<FoodScanScreenProps> = ({ navigation, route }) =>
   const [scanned, setScanned] = useState(false);
   const [loading, setLoading] = useState(false);
   const [flashlight, setFlashlight] = useState(false);
+  const soundsEnabled = useSoundsEnabled();
   const scanLock = useRef(false);
   const params = route.params;
   const captureParams = params?.mode === 'capture-barcode' ? params : undefined;
@@ -257,7 +259,11 @@ const FoodScanScreen: React.FC<FoodScanScreenProps> = ({ navigation, route }) =>
   const handleLabelCapture = async () => {
     if (!cameraRef.current) return;
     try {
-      const photo = await cameraRef.current.takePictureAsync({ base64: true, quality: 0.7 });
+      const photo = await cameraRef.current.takePictureAsync({
+        base64: true,
+        quality: 0.7,
+        shutterSound: soundsEnabled,
+      });
       if (!photo?.base64) {
         Toast.show({ type: 'error', text1: 'Error', text2: 'Failed to capture photo.' });
         return;
@@ -364,7 +370,11 @@ const FoodScanScreen: React.FC<FoodScanScreenProps> = ({ navigation, route }) =>
   const handlePhotoCapture = async () => {
     if (!cameraRef.current) return;
     try {
-      const photo = await cameraRef.current.takePictureAsync({ base64: false, quality: 0.7 });
+      const photo = await cameraRef.current.takePictureAsync({
+        base64: false,
+        quality: 0.7,
+        shutterSound: soundsEnabled,
+      });
       if (!photo?.uri) {
         Toast.show({ type: 'error', text1: 'Error', text2: 'Failed to capture photo.' });
         return;
