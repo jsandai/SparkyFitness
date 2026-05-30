@@ -2,6 +2,7 @@ import React, { useMemo, useRef, useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, ActivityIndicator } from 'react-native';
 import Animated, { LinearTransition } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useQueryClient } from '@tanstack/react-query';
 import { useCSSVariable } from 'uniwind';
 import Button from '../components/ui/Button';
 import FormInput from '../components/FormInput';
@@ -10,11 +11,13 @@ import StepperInput from '../components/StepperInput';
 import BottomSheetPicker from '../components/BottomSheetPicker';
 import CalendarSheet, { type CalendarSheetRef } from '../components/CalendarSheet';
 import NutritionMacroCard from '../components/NutritionMacroCard';
+import SwipeableIngredientRow from '../components/SwipeableIngredientRow';
 import { useActiveWorkoutBarPadding } from '../components/ActiveWorkoutBar';
 import { useMealTypes, usePreferences } from '../hooks';
 import { useFoodEntryMealDetails } from '../hooks/useFoodEntryMealDetails';
 import { useUpdateFoodEntryMeal } from '../hooks/useUpdateFoodEntryMeal';
 import { useDeleteFoodEntryMeal } from '../hooks/useDeleteFoodEntryMeal';
+import { foodEntryMealDetailQueryKey } from '../hooks/queryKeys';
 import { formatDateLabel, normalizeDate } from '../utils/dateUtils';
 import { getMealTypeLabel } from '../constants/meals';
 import { toMealFoodPayload } from '../utils/mealBuilderDraft';
@@ -29,6 +32,7 @@ const EditLoggedMealScreen: React.FC<EditLoggedMealScreenProps> = ({ navigation,
   const insets = useSafeAreaInsets();
   const activeWorkoutBarPadding = useActiveWorkoutBarPadding('stack');
   const calendarRef = useRef<CalendarSheetRef>(null);
+  const queryClient = useQueryClient();
 
   const { meal, isLoading, isError, error } = useFoodEntryMealDetails(foodEntryMealId, { initialMeal });
   const { mealTypes } = useMealTypes();
@@ -39,6 +43,7 @@ const EditLoggedMealScreen: React.FC<EditLoggedMealScreenProps> = ({ navigation,
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedMealId, setSelectedMealId] = useState<string | undefined>(undefined);
   const [quantityText, setQuantityText] = useState<string | null>(null);
+  const [pendingRemovedIndices, setPendingRemovedIndices] = useState<Set<number>>(new Set());
 
   const effectiveName = name ?? meal?.name ?? '';
   const effectiveDate = selectedDate ?? (meal ? normalizeDate(meal.entry_date) : null);
@@ -73,14 +78,63 @@ const EditLoggedMealScreen: React.FC<EditLoggedMealScreenProps> = ({ navigation,
     },
   });
 
-  const { confirmAndDelete, isPending: isDeletePending, invalidateCache: invalidateDeleteCache } = useDeleteFoodEntryMeal({
+  const { confirmAndDelete, deleteEntry, isPending: isDeletePending, invalidateCache: invalidateDeleteCache } = useDeleteFoodEntryMeal({
     mealId: foodEntryMealId,
     entryDate: meal?.entry_date ?? '',
     onSuccess: () => {
       invalidateDeleteCache();
       navigation.goBack();
     },
+    onError: () => {
+      setPendingRemovedIndices(new Set());
+    },
   });
+
+  const {
+    updateMeal: removeIngredientUpdate,
+    isPending: isIngredientUpdatePending,
+    invalidateCache: invalidateIngredientUpdateCache,
+  } = useUpdateFoodEntryMeal({
+    mealId: foodEntryMealId,
+    entryDate: meal?.entry_date ?? '',
+    onSuccess: (updatedMeal) => {
+      queryClient.setQueryData(foodEntryMealDetailQueryKey(foodEntryMealId), updatedMeal);
+      setPendingRemovedIndices(new Set());
+      invalidateIngredientUpdateCache();
+    },
+    onError: () => {
+      setPendingRemovedIndices(new Set());
+    },
+  });
+
+  const isRowActionDisabled = isIngredientUpdatePending || isDeletePending || isSavePending;
+
+  const handleRemoveIngredient = (index: number) => {
+    if (!meal || isRowActionDisabled) return;
+
+    const nextRemoved = new Set(pendingRemovedIndices);
+    nextRemoved.add(index);
+    setPendingRemovedIndices(nextRemoved);
+
+    const nextFoods = meal.foods.filter((_, idx) => !nextRemoved.has(idx));
+
+    if (nextFoods.length === 0) {
+      deleteEntry();
+      return;
+    }
+
+    const payload: FoodEntryMealUpdateData = {
+      name: meal.name,
+      meal_type: meal.meal_type,
+      meal_type_id: meal.meal_type_id ?? undefined,
+      entry_date: normalizeDate(meal.entry_date),
+      quantity: meal.quantity,
+      unit: meal.unit,
+      meal_template_id: meal.meal_template_id,
+      foods: nextFoods.map(toMealFoodPayload),
+    };
+    removeIngredientUpdate(payload);
+  };
 
   const [accentColor, textPrimary] = useCSSVariable([
     '--color-accent-primary',
@@ -161,7 +215,7 @@ const EditLoggedMealScreen: React.FC<EditLoggedMealScreenProps> = ({ navigation,
           <Button
             variant="ghost"
             onPress={handleSave}
-            disabled={!canSave || isSavePending}
+            disabled={!canSave || isRowActionDisabled}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             textClassName="font-medium"
           >
@@ -261,35 +315,33 @@ const EditLoggedMealScreen: React.FC<EditLoggedMealScreenProps> = ({ navigation,
           </View>
         </Animated.View>
 
-        {/* Component foods (read-only) */}
+        {/* Component foods (swipe to delete) */}
         <View className="mt-2">
           <Text className="text-text-secondary text-sm mb-2">Foods in this meal</Text>
-          <View className="bg-surface rounded-xl">
-            {meal.foods.map((food, index) => {
-              const ratio = food.serving_size > 0 ? food.quantity / food.serving_size : food.quantity;
-              const foodCals = Math.round((food.calories ?? 0) * ratio * scaleFactor);
-              return (
-                <View
-                  key={`${food.food_id}-${index}`}
-                  className={`flex-row items-center px-3 py-2 ${index < meal.foods.length - 1 ? 'border-b border-border-subtle' : ''}`}
-                >
-                  <View className="flex-1 mr-2">
-                    <Text className="text-text-primary text-base" numberOfLines={1}>
-                      {food.food_name}
-                    </Text>
-                    <Text className="text-text-secondary text-xs mt-0.5">
-                      {food.quantity * scaleFactor % 1 === 0
-                        ? food.quantity * scaleFactor
-                        : parseFloat((food.quantity * scaleFactor).toFixed(2))}{' '}
-                      {food.unit}
-                    </Text>
-                  </View>
-                  <Text className="text-text-secondary text-sm font-medium">
-                    {foodCals} Cal
-                  </Text>
-                </View>
-              );
-            })}
+          <View className="bg-surface rounded-xl overflow-hidden">
+            {(() => {
+              const visibleFoods = meal.foods
+                .map((food, originalIndex) => ({ food, originalIndex }))
+                .filter(({ originalIndex }) => !pendingRemovedIndices.has(originalIndex));
+              return visibleFoods.map(({ food, originalIndex }, visibleIndex) => {
+                const ratio = food.serving_size > 0 ? food.quantity / food.serving_size : food.quantity;
+                const foodCals = Math.round((food.calories ?? 0) * ratio * scaleFactor);
+                const scaledQty = food.quantity * scaleFactor;
+                const displayQty = scaledQty % 1 === 0 ? scaledQty : parseFloat(scaledQty.toFixed(2));
+                return (
+                  <SwipeableIngredientRow
+                    key={`${food.food_id}-${originalIndex}`}
+                    foodName={food.food_name}
+                    quantityLabel={`${displayQty} ${food.unit}`}
+                    caloriesLabel={`${foodCals} Cal`}
+                    showBottomBorder={visibleIndex < visibleFoods.length - 1}
+                    isLastIngredient={visibleFoods.length === 1}
+                    disabled={isRowActionDisabled}
+                    onConfirmDelete={() => handleRemoveIngredient(originalIndex)}
+                  />
+                );
+              });
+            })()}
           </View>
         </View>
 
@@ -297,7 +349,7 @@ const EditLoggedMealScreen: React.FC<EditLoggedMealScreenProps> = ({ navigation,
         <Button
           variant="ghost"
           onPress={confirmAndDelete}
-          disabled={isDeletePending}
+          disabled={isRowActionDisabled}
           className="mt-2"
           textClassName="text-bg-danger font-medium"
         >
