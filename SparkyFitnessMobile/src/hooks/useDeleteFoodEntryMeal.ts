@@ -14,12 +14,14 @@ interface UseDeleteFoodEntryMealOptions {
   mealId: string;
   entryDate: string;
   onSuccess?: () => void;
+  onError?: (error: unknown) => void;
 }
 
 export function useDeleteFoodEntryMeal({
   mealId,
   entryDate,
   onSuccess,
+  onError,
 }: UseDeleteFoodEntryMealOptions) {
   const queryClient = useQueryClient();
   const normalizedDate = normalizeDate(entryDate);
@@ -29,8 +31,9 @@ export function useDeleteFoodEntryMeal({
     onSuccess: () => {
       onSuccess?.();
     },
-    onError: () => {
+    onError: (error) => {
       Toast.show({ type: 'error', text1: 'Failed to delete', text2: 'Please try again.' });
+      onError?.(error);
     },
   });
 
