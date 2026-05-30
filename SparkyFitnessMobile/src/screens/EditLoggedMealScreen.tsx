@@ -22,7 +22,7 @@ import { formatDateLabel, normalizeDate } from '../utils/dateUtils';
 import { getMealTypeLabel } from '../constants/meals';
 import { toMealFoodPayload } from '../utils/mealBuilderDraft';
 import { DECIMAL_INPUT_REGEX, parseDecimalInput } from '../utils/numericInput';
-import type { FoodEntryMealUpdateData } from '../types/foodEntryMeals';
+import type { FoodEntryMeal, FoodEntryMealUpdateData } from '../types/foodEntryMeals';
 import type { RootStackScreenProps } from '../types/navigation';
 
 type EditLoggedMealScreenProps = RootStackScreenProps<'EditLoggedMeal'>;
@@ -43,7 +43,9 @@ const EditLoggedMealScreen: React.FC<EditLoggedMealScreenProps> = ({ navigation,
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [selectedMealId, setSelectedMealId] = useState<string | undefined>(undefined);
   const [quantityText, setQuantityText] = useState<string | null>(null);
-  const [pendingRemovedIndices, setPendingRemovedIndices] = useState<Set<number>>(new Set());
+  // Snapshot of the meal taken right before an optimistic ingredient delete,
+  // used to roll back the cache if the PUT or DELETE fails.
+  const optimisticSnapshotRef = useRef<FoodEntryMeal | null>(null);
 
   const effectiveName = name ?? meal?.name ?? '';
   const effectiveDate = selectedDate ?? (meal ? normalizeDate(meal.entry_date) : null);
@@ -78,16 +80,23 @@ const EditLoggedMealScreen: React.FC<EditLoggedMealScreenProps> = ({ navigation,
     },
   });
 
+  const rollbackOptimisticDelete = () => {
+    const snapshot = optimisticSnapshotRef.current;
+    if (snapshot) {
+      queryClient.setQueryData(foodEntryMealDetailQueryKey(foodEntryMealId), snapshot);
+      optimisticSnapshotRef.current = null;
+    }
+  };
+
   const { confirmAndDelete, deleteEntry, isPending: isDeletePending, invalidateCache: invalidateDeleteCache } = useDeleteFoodEntryMeal({
     mealId: foodEntryMealId,
     entryDate: meal?.entry_date ?? '',
     onSuccess: () => {
+      optimisticSnapshotRef.current = null;
       invalidateDeleteCache();
       navigation.goBack();
     },
-    onError: () => {
-      setPendingRemovedIndices(new Set());
-    },
+    onError: rollbackOptimisticDelete,
   });
 
   const {
@@ -97,14 +106,15 @@ const EditLoggedMealScreen: React.FC<EditLoggedMealScreenProps> = ({ navigation,
   } = useUpdateFoodEntryMeal({
     mealId: foodEntryMealId,
     entryDate: meal?.entry_date ?? '',
-    onSuccess: (updatedMeal) => {
-      queryClient.setQueryData(foodEntryMealDetailQueryKey(foodEntryMealId), updatedMeal);
-      setPendingRemovedIndices(new Set());
+    onSuccess: () => {
+      // The optimistic cache update done in handleRemoveIngredient already
+      // reflects the deletion. Invalidate sibling caches (daily summary,
+      // recent meals) and let this query refetch in the background to pick
+      // up the server's authoritative snapshot.
+      optimisticSnapshotRef.current = null;
       invalidateIngredientUpdateCache();
     },
-    onError: () => {
-      setPendingRemovedIndices(new Set());
-    },
+    onError: rollbackOptimisticDelete,
   });
 
   const isRowActionDisabled = isIngredientUpdatePending || isDeletePending || isSavePending;
@@ -112,11 +122,13 @@ const EditLoggedMealScreen: React.FC<EditLoggedMealScreenProps> = ({ navigation,
   const handleRemoveIngredient = (index: number) => {
     if (!meal || isRowActionDisabled) return;
 
-    const nextRemoved = new Set(pendingRemovedIndices);
-    nextRemoved.add(index);
-    setPendingRemovedIndices(nextRemoved);
+    const nextFoods = meal.foods.filter((_, idx) => idx !== index);
 
-    const nextFoods = meal.foods.filter((_, idx) => !nextRemoved.has(idx));
+    optimisticSnapshotRef.current = meal;
+    queryClient.setQueryData<FoodEntryMeal>(
+      foodEntryMealDetailQueryKey(foodEntryMealId),
+      (cached) => (cached ? { ...cached, foods: nextFoods } : cached),
+    );
 
     if (nextFoods.length === 0) {
       deleteEntry();
@@ -319,29 +331,24 @@ const EditLoggedMealScreen: React.FC<EditLoggedMealScreenProps> = ({ navigation,
         <View className="mt-2">
           <Text className="text-text-secondary text-sm mb-2">Foods in this meal</Text>
           <View className="bg-surface rounded-xl overflow-hidden">
-            {(() => {
-              const visibleFoods = meal.foods
-                .map((food, originalIndex) => ({ food, originalIndex }))
-                .filter(({ originalIndex }) => !pendingRemovedIndices.has(originalIndex));
-              return visibleFoods.map(({ food, originalIndex }, visibleIndex) => {
-                const ratio = food.serving_size > 0 ? food.quantity / food.serving_size : food.quantity;
-                const foodCals = Math.round((food.calories ?? 0) * ratio * scaleFactor);
-                const scaledQty = food.quantity * scaleFactor;
-                const displayQty = scaledQty % 1 === 0 ? scaledQty : parseFloat(scaledQty.toFixed(2));
-                return (
-                  <SwipeableIngredientRow
-                    key={`${food.food_id}-${originalIndex}`}
-                    foodName={food.food_name}
-                    quantityLabel={`${displayQty} ${food.unit}`}
-                    caloriesLabel={`${foodCals} Cal`}
-                    showBottomBorder={visibleIndex < visibleFoods.length - 1}
-                    isLastIngredient={visibleFoods.length === 1}
-                    disabled={isRowActionDisabled}
-                    onConfirmDelete={() => handleRemoveIngredient(originalIndex)}
-                  />
-                );
-              });
-            })()}
+            {meal.foods.map((food, index) => {
+              const ratio = food.serving_size > 0 ? food.quantity / food.serving_size : food.quantity;
+              const foodCals = Math.round((food.calories ?? 0) * ratio * scaleFactor);
+              const scaledQty = food.quantity * scaleFactor;
+              const displayQty = scaledQty % 1 === 0 ? scaledQty : parseFloat(scaledQty.toFixed(2));
+              return (
+                <SwipeableIngredientRow
+                  key={`${food.food_id}-${index}`}
+                  foodName={food.food_name}
+                  quantityLabel={`${displayQty} ${food.unit}`}
+                  caloriesLabel={`${foodCals} Cal`}
+                  showBottomBorder={index < meal.foods.length - 1}
+                  isLastIngredient={meal.foods.length === 1}
+                  disabled={isRowActionDisabled}
+                  onConfirmDelete={() => handleRemoveIngredient(index)}
+                />
+              );
+            })}
           </View>
         </View>
 
