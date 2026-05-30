@@ -118,13 +118,19 @@ const EditLoggedMealScreen: React.FC<EditLoggedMealScreenProps> = ({ navigation,
   });
 
   const isRowActionDisabled = isIngredientUpdatePending || isDeletePending || isSavePending;
+  // Block swipe-delete while the form has unsaved edits to other meal fields:
+  // the optimistic PUT uses server-side meal values for everything except foods,
+  // so firing it while `dirty` would silently overwrite the user's pending
+  // name / date / meal type / quantity changes.
+  const isSwipeDisabled = isRowActionDisabled || dirty;
 
-  const handleRemoveIngredient = (index: number) => {
-    if (!meal || isRowActionDisabled) return;
+  const handleRemoveIngredient = async (index: number) => {
+    if (!meal || isSwipeDisabled) return;
 
     const nextFoods = meal.foods.filter((_, idx) => idx !== index);
 
     optimisticSnapshotRef.current = meal;
+    await queryClient.cancelQueries({ queryKey: foodEntryMealDetailQueryKey(foodEntryMealId) });
     queryClient.setQueryData<FoodEntryMeal>(
       foodEntryMealDetailQueryKey(foodEntryMealId),
       (cached) => (cached ? { ...cached, foods: nextFoods } : cached),
@@ -344,7 +350,7 @@ const EditLoggedMealScreen: React.FC<EditLoggedMealScreenProps> = ({ navigation,
                   caloriesLabel={`${foodCals} Cal`}
                   showBottomBorder={index < meal.foods.length - 1}
                   isLastIngredient={meal.foods.length === 1}
-                  disabled={isRowActionDisabled}
+                  disabled={isSwipeDisabled}
                   onConfirmDelete={() => handleRemoveIngredient(index)}
                 />
               );
