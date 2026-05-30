@@ -23,7 +23,7 @@ const SwipeableIngredientRow: React.FC<SwipeableIngredientRowProps> = ({
   disabled = false,
   onConfirmDelete,
 }) => {
-  const swipeableRef = useRef<any>(null);
+  const swipeableRef = useRef<React.ComponentRef<typeof ReanimatedSwipeable>>(null);
 
   const handleDeletePress = () => {
     const message = isLastIngredient
