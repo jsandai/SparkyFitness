@@ -17,12 +17,14 @@ interface UseUpdateFoodEntryMealOptions {
   mealId: string;
   entryDate: string;
   onSuccess?: (meal: FoodEntryMeal) => void;
+  onError?: (error: unknown) => void;
 }
 
 export function useUpdateFoodEntryMeal({
   mealId,
   entryDate,
   onSuccess,
+  onError,
 }: UseUpdateFoodEntryMealOptions) {
   const queryClient = useQueryClient();
   const normalizedDate = normalizeDate(entryDate);
@@ -37,6 +39,7 @@ export function useUpdateFoodEntryMeal({
         ? "You don't have permission to edit this meal."
         : 'Please try again.';
       Toast.show({ type: 'error', text1: 'Failed to save meal', text2: message });
+      onError?.(error);
     },
   });
 
