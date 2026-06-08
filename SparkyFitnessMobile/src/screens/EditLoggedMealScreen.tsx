@@ -124,13 +124,17 @@ const EditLoggedMealScreen: React.FC<EditLoggedMealScreenProps> = ({ navigation,
   // name / date / meal type / quantity changes.
   const isSwipeDisabled = isRowActionDisabled || dirty;
 
-  const handleRemoveIngredient = async (index: number) => {
+  const handleRemoveIngredient = (index: number) => {
     if (!meal || isSwipeDisabled) return;
 
     const nextFoods = meal.foods.filter((_, idx) => idx !== index);
 
     optimisticSnapshotRef.current = meal;
-    await queryClient.cancelQueries({ queryKey: foodEntryMealDetailQueryKey(foodEntryMealId) });
+    // Fire-and-forget cancel: in-flight refetches are flagged cancelled
+    // synchronously at the cache layer, which is all we need before
+    // setQueryData. Awaiting would yield to the event loop and open a small
+    // window where isSwipeDisabled has not yet flipped true via React state.
+    void queryClient.cancelQueries({ queryKey: foodEntryMealDetailQueryKey(foodEntryMealId) });
     queryClient.setQueryData<FoodEntryMeal>(
       foodEntryMealDetailQueryKey(foodEntryMealId),
       (cached) => (cached ? { ...cached, foods: nextFoods } : cached),
