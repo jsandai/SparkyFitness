@@ -23,7 +23,13 @@ const SwipeableIngredientRow: React.FC<SwipeableIngredientRowProps> = ({
   disabled = false,
   onConfirmDelete,
 }) => {
-  const swipeableRef = useRef<React.ComponentRef<typeof ReanimatedSwipeable>>(null);
+  // Matches the existing `SwipeableFoodRow` convention in this codebase. A more
+  // specific ref type (e.g. `React.ComponentRef<typeof ReanimatedSwipeable>`)
+  // resolves to `{}` and breaks `.close()` under the current Expo SDK 55 React
+  // types; until upstream tightens this, `any` is what the rest of the project
+  // uses for the same ref.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const swipeableRef = useRef<any>(null);
 
   const handleDeletePress = () => {
     const message = isLastIngredient
