@@ -108,15 +108,24 @@ export function useFoodDatabaseManager() {
       );
       // Clearing the food id routes the save through the create path, which
       // rebuilds the food and every variant from scratch and assigns fresh ids,
-      // so the original food is left untouched. Stripping the variant ids here
-      // keeps that intent explicit and guards against future save-path changes.
+      // so the original food is left untouched. Stripping the source ids and
+      // setting the current user as owner keeps that intent explicit (the copy
+      // is a new private food owned by whoever duplicates it) and guards against
+      // future save-path changes.
       const newVariants = (variants ?? []).map(({ id, ...variant }) => variant);
+      let newDefaultVariant: FoodVariant | undefined;
+      if (food.default_variant) {
+        const { id, ...rest } = food.default_variant;
+        newDefaultVariant = rest;
+      }
       setDuplicatingFood({
         ...food,
         id: '',
+        user_id: user?.id,
         name: `${food.name} ${t('foodDatabaseManager.copySuffix', '(copy)')}`,
         shared_with_public: false,
         variants: newVariants,
+        default_variant: newDefaultVariant,
       });
       setShowDuplicateDialog(true);
     } catch (err) {
