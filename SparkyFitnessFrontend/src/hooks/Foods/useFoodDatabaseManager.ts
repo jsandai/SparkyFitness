@@ -56,6 +56,7 @@ export function useFoodDatabaseManager() {
   const [foodToAddToMeal, setFoodToAddToMeal] = useState<Food | null>(null);
   const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
   const [duplicatingFood, setDuplicatingFood] = useState<Food | null>(null);
+  const [isDuplicating, setIsDuplicating] = useState(false);
 
   const [pendingDeletion, setPendingDeletion] = useState<{
     food: Food;
@@ -99,6 +100,7 @@ export function useFoodDatabaseManager() {
   };
 
   const handleDuplicate = async (food: Food) => {
+    setIsDuplicating(true);
     try {
       // The create flow reads variants inline from food.variants. An id-less
       // food never triggers the server-side variant fetch, so pre-fetch them
@@ -139,6 +141,8 @@ export function useFoodDatabaseManager() {
         ),
         variant: 'destructive',
       });
+    } finally {
+      setIsDuplicating(false);
     }
   };
 
@@ -235,6 +239,7 @@ export function useFoodDatabaseManager() {
     showDuplicateDialog,
     setShowDuplicateDialog,
     duplicatingFood,
+    isDuplicating,
     togglePublicSharing,
     canEdit,
     handlePageChange,

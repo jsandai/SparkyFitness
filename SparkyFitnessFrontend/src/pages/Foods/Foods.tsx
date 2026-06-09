@@ -110,6 +110,7 @@ const FoodDatabaseManager = () => {
     handleDuplicateComplete,
     showDuplicateDialog,
     duplicatingFood,
+    isDuplicating,
     handleSaveComplete,
     handleAddFoodToMeal,
     handleDeleteRequest,
@@ -335,7 +336,10 @@ const FoodDatabaseManager = () => {
                   <Edit className="mr-2 h-4 w-4" />
                   {t('foodDatabaseManager.editFood', 'Edit food')}
                 </DropdownMenuItem>
-                <DropdownMenuItem onClick={() => handleDuplicate(food)}>
+                <DropdownMenuItem
+                  disabled={isDuplicating}
+                  onClick={() => handleDuplicate(food)}
+                >
                   <Copy className="mr-2 h-4 w-4" />
                   {t('foodDatabaseManager.duplicateFood', 'Duplicate food')}
                 </DropdownMenuItem>
@@ -384,6 +388,7 @@ const FoodDatabaseManager = () => {
       canEdit,
       handleEdit,
       handleDuplicate,
+      isDuplicating,
       handleDeleteRequest,
       togglePublicSharing,
       getFoodSourceBadge,
