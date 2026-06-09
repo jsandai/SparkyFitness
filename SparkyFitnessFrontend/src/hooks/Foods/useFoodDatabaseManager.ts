@@ -110,7 +110,7 @@ export function useFoodDatabaseManager() {
       // rebuilds the food and every variant from scratch and assigns fresh ids,
       // so the original food is left untouched. Stripping the variant ids here
       // keeps that intent explicit and guards against future save-path changes.
-      const newVariants = variants.map(({ id, ...variant }) => variant);
+      const newVariants = (variants ?? []).map(({ id, ...variant }) => variant);
       setDuplicatingFood({
         ...food,
         id: '',
