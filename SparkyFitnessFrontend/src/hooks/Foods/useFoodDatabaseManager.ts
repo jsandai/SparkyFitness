@@ -113,11 +113,11 @@ export function useFoodDatabaseManager() {
       // is a new private food owned by whoever duplicates it) and guards against
       // future save-path changes.
       const newVariants = (variants ?? []).map(
-        ({ id: _id, ...variant }) => variant
+        ({ id: _id, is_locked: _isLocked, ...variant }) => variant
       );
       let newDefaultVariant: FoodVariant | undefined;
       if (food.default_variant) {
-        const { id: _id, ...rest } = food.default_variant;
+        const { id: _id, is_locked: _isLocked, ...rest } = food.default_variant;
         newDefaultVariant = rest;
       }
       setDuplicatingFood({
