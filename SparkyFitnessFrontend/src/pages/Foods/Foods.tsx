@@ -109,7 +109,6 @@ const FoodDatabaseManager = () => {
     handleDuplicate,
     handleDuplicateComplete,
     showDuplicateDialog,
-    setShowDuplicateDialog,
     duplicatingFood,
     handleSaveComplete,
     handleAddFoodToMeal,
@@ -616,7 +615,6 @@ const FoodDatabaseManager = () => {
         open={showDuplicateDialog}
         onOpenChange={(open) => {
           if (!open) handleDuplicateComplete();
-          else setShowDuplicateDialog(true);
         }}
       >
         <DialogContent

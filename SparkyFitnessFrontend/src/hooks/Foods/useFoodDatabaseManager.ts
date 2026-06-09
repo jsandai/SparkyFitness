@@ -112,10 +112,12 @@ export function useFoodDatabaseManager() {
       // setting the current user as owner keeps that intent explicit (the copy
       // is a new private food owned by whoever duplicates it) and guards against
       // future save-path changes.
-      const newVariants = (variants ?? []).map(({ id, ...variant }) => variant);
+      const newVariants = (variants ?? []).map(
+        ({ id: _id, ...variant }) => variant
+      );
       let newDefaultVariant: FoodVariant | undefined;
       if (food.default_variant) {
-        const { id, ...rest } = food.default_variant;
+        const { id: _id, ...rest } = food.default_variant;
         newDefaultVariant = rest;
       }
       setDuplicatingFood({
