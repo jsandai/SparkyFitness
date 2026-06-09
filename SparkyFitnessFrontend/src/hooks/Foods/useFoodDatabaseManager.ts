@@ -106,14 +106,17 @@ export function useFoodDatabaseManager() {
       const variants = await queryClient.fetchQuery(
         foodVariantsOptions(food.id)
       );
-      // Clearing the id routes the save through the create path, which assigns
-      // fresh food and variant ids, so the original food is left untouched.
+      // Clearing the food id routes the save through the create path, which
+      // rebuilds the food and every variant from scratch and assigns fresh ids,
+      // so the original food is left untouched. Stripping the variant ids here
+      // keeps that intent explicit and guards against future save-path changes.
+      const newVariants = variants.map(({ id, ...variant }) => variant);
       setDuplicatingFood({
         ...food,
         id: '',
         name: `${food.name} ${t('foodDatabaseManager.copySuffix', '(copy)')}`,
         shared_with_public: false,
-        variants,
+        variants: newVariants,
       });
       setShowDuplicateDialog(true);
     } catch (err) {

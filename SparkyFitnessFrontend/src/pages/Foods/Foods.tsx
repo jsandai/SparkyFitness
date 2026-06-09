@@ -612,7 +612,13 @@ const FoodDatabaseManager = () => {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showDuplicateDialog} onOpenChange={setShowDuplicateDialog}>
+      <Dialog
+        open={showDuplicateDialog}
+        onOpenChange={(open) => {
+          if (!open) handleDuplicateComplete();
+          else setShowDuplicateDialog(true);
+        }}
+      >
         <DialogContent
           requireConfirmation
           className="max-w-4xl max-h-[90vh] overflow-y-auto"
