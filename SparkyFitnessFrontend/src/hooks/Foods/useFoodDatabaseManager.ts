@@ -18,6 +18,7 @@ import {
   useFoods,
   useToggleFoodPublicMutation,
 } from '@/hooks/Foods/useFoods';
+import { foodVariantsOptions } from '@/hooks/Foods/useFoodVariants';
 import { useQueryClient } from '@tanstack/react-query';
 
 export function useFoodDatabaseManager() {
@@ -53,6 +54,8 @@ export function useFoodDatabaseManager() {
   const [showFoodUnitSelectorDialog, setShowFoodUnitSelectorDialog] =
     useState(false);
   const [foodToAddToMeal, setFoodToAddToMeal] = useState<Food | null>(null);
+  const [showDuplicateDialog, setShowDuplicateDialog] = useState(false);
+  const [duplicatingFood, setDuplicatingFood] = useState<Food | null>(null);
 
   const [pendingDeletion, setPendingDeletion] = useState<{
     food: Food;
@@ -93,6 +96,41 @@ export function useFoodDatabaseManager() {
   const handleSaveComplete = () => {
     setShowEditDialog(false);
     setEditingFood(null);
+  };
+
+  const handleDuplicate = async (food: Food) => {
+    try {
+      // The create flow reads variants inline from food.variants. An id-less
+      // food never triggers the server-side variant fetch, so pre-fetch them
+      // here and attach them to the copy before opening the form.
+      const variants = await queryClient.fetchQuery(
+        foodVariantsOptions(food.id)
+      );
+      // Clearing the id routes the save through the create path, which assigns
+      // fresh food and variant ids, so the original food is left untouched.
+      setDuplicatingFood({
+        ...food,
+        id: '',
+        name: `${food.name} ${t('foodDatabaseManager.copySuffix', '(copy)')}`,
+        shared_with_public: false,
+        variants,
+      });
+      setShowDuplicateDialog(true);
+    } catch (err) {
+      toast({
+        title: t('common.error', 'Error'),
+        description: t(
+          'foodDatabaseManager.duplicateFailed',
+          'Failed to duplicate food.'
+        ),
+        variant: 'destructive',
+      });
+    }
+  };
+
+  const handleDuplicateComplete = () => {
+    setShowDuplicateDialog(false);
+    setDuplicatingFood(null);
   };
 
   const handleFoodSelected = (item: Food | Meal, type: 'food' | 'meal') => {
@@ -180,10 +218,15 @@ export function useFoodDatabaseManager() {
     setShowFoodUnitSelectorDialog,
     foodToAddToMeal,
     pendingDeletion,
+    showDuplicateDialog,
+    setShowDuplicateDialog,
+    duplicatingFood,
     togglePublicSharing,
     canEdit,
     handlePageChange,
     handleEdit,
+    handleDuplicate,
+    handleDuplicateComplete,
     handleSaveComplete,
     handleFoodSelected,
     handleAddFoodToMeal,
