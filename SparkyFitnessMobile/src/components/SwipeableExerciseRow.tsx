@@ -3,6 +3,7 @@ import { Alert, View, Text, Pressable, TouchableOpacity } from 'react-native';
 import ReanimatedSwipeable, {
   type SwipeableMethods,
 } from 'react-native-gesture-handler/ReanimatedSwipeable';
+import SwipeEditAction from './SwipeEditAction';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -127,13 +128,30 @@ const SwipeableExerciseRow: React.FC<SwipeableExerciseRowProps> = ({
     ]);
   };
 
+  // Left-swipe Edit, mirroring the right-swipe Delete. Only when editing is
+  // available (onPress provided).
+  const renderLeftActions = onPress
+    ? () => (
+        <SwipeEditAction
+          onPress={() => {
+            // Navigate first, then close (close-before-navigate drops the nav).
+            onPress();
+            swipeableRef.current?.close();
+          }}
+        />
+      )
+    : undefined;
+
   return (
     <Animated.View style={animatedStyle} onLayout={handleLayout}>
       <ReanimatedSwipeable
         ref={swipeableRef}
         renderRightActions={renderRightActions}
+        renderLeftActions={renderLeftActions}
         overshootRight={false}
+        overshootLeft={false}
         rightThreshold={40}
+        leftThreshold={40}
       >
         <Pressable className="py-2.5 bg-surface" onPress={onPress} onLongPress={handleLongPress}>
           <View className="flex-row items-center">

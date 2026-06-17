@@ -1,6 +1,7 @@
 import React, { useRef } from 'react';
 import { Alert, View, Text, TouchableOpacity } from 'react-native';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
+import SwipeEditAction from './SwipeEditAction';
 
 interface SwipeableIngredientRowProps {
   foodName: string;
@@ -92,6 +93,21 @@ const SwipeableIngredientRow: React.FC<SwipeableIngredientRowProps> = ({
     </TouchableOpacity>
   );
 
+  // Left-swipe Edit, mirroring the right-swipe Delete. Only when editing is
+  // available (onPress provided).
+  const renderLeftActions = onPress
+    ? () => (
+        <SwipeEditAction
+          onPress={() => {
+            // Navigate first, then close (close-before-navigate drops the nav).
+            onPress();
+            swipeableRef.current?.close();
+          }}
+          disabled={disabled}
+        />
+      )
+    : undefined;
+
   const rowBody = (
     <View
       className={`flex-row items-center px-3 py-2 bg-surface ${showBottomBorder ? 'border-b border-border-subtle' : ''}`}
@@ -110,8 +126,11 @@ const SwipeableIngredientRow: React.FC<SwipeableIngredientRowProps> = ({
     <ReanimatedSwipeable
       ref={swipeableRef}
       renderRightActions={renderRightActions}
+      renderLeftActions={renderLeftActions}
       overshootRight={false}
+      overshootLeft={false}
       rightThreshold={40}
+      leftThreshold={40}
       enabled={!disabled}
     >
       {onPress ? (

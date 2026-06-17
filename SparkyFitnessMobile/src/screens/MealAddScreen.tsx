@@ -549,7 +549,28 @@ const MealAddScreen: React.FC<MealAddScreenProps> = ({ navigation, route }) => {
                   <ReanimatedSwipeable
                     key={ingredientKey}
                     overshootRight={false}
+                    overshootLeft={false}
                     rightThreshold={40}
+                    leftThreshold={40}
+                    renderLeftActions={(_progress, _dragX, swipeable) => (
+                      <View className="pr-3 py-1" style={{ width: 84 }}>
+                        <View className="flex-1 bg-accent-primary rounded-lg overflow-hidden justify-center items-center">
+                          <Text className="text-accent-text font-semibold text-sm">Edit</Text>
+                          <GHTouchableOpacity
+                            onPress={() => {
+                              editIngredient(ingredient, index);
+                              swipeable.close();
+                            }}
+                            activeOpacity={0.7}
+                            accessibilityLabel={`Edit ${ingredient.food_name || 'ingredient'}`}
+                            accessibilityRole="button"
+                            style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0 }}
+                          >
+                            <View style={{ flex: 1 }} />
+                          </GHTouchableOpacity>
+                        </View>
+                      </View>
+                    )}
                     renderRightActions={() => (
                       <View className="pl-3 py-1" style={{ width: 84 }}>
                         <TouchableOpacity

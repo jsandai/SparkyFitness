@@ -3,6 +3,7 @@ import { Alert, View, Text, TouchableOpacity } from 'react-native';
 import Button from './ui/Button';
 import { useNavigation } from '@react-navigation/native';
 import ReanimatedSwipeable from 'react-native-gesture-handler/ReanimatedSwipeable';
+import SwipeEditAction from './SwipeEditAction';
 import Animated, {
   useSharedValue,
   useAnimatedStyle,
@@ -114,13 +115,29 @@ const SwipeableFoodRow: React.FC<SwipeableFoodRowProps> = ({ entry, nutrition, o
     Alert.alert(name, undefined, buttons);
   };
 
+  // Left-swipe Edit, mirroring the right-swipe Delete; opens the same screen the
+  // row tap does.
+  const renderLeftActions = () => (
+    <SwipeEditAction
+      onPress={() => {
+        // Navigate first, then close: calling close() before navigation drops
+        // the navigation (the row-body tap, which only navigates, works fine).
+        handlePress();
+        swipeableRef.current?.close();
+      }}
+    />
+  );
+
   return (
     <Animated.View style={animatedStyle} onLayout={handleLayout}>
       <ReanimatedSwipeable
         ref={swipeableRef}
         renderRightActions={renderRightActions}
+        renderLeftActions={renderLeftActions}
         overshootRight={false}
+        overshootLeft={false}
         rightThreshold={40}
+        leftThreshold={40}
       >
         <View className="py-1.5 flex-row items-center bg-surface">
           <TouchableOpacity
