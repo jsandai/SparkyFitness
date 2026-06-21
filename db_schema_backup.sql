@@ -2375,6 +2375,7 @@ CREATE TABLE public.user_preferences (
     goal_mode_calculation_method character varying(50) DEFAULT 'manual'::character varying NOT NULL,
     goal_mode_custom_percentage integer DEFAULT 0 NOT NULL,
     use_external_bmr boolean DEFAULT false NOT NULL,
+    include_meals_in_food_search boolean DEFAULT false NOT NULL,
     CONSTRAINT check_energy_unit CHECK (((energy_unit)::text = ANY (ARRAY[('kcal'::character varying)::text, ('kJ'::character varying)::text]))),
     CONSTRAINT logging_level_check CHECK ((logging_level = ANY (ARRAY['DEBUG'::text, 'INFO'::text, 'WARN'::text, 'ERROR'::text, 'SILENT'::text]))),
     CONSTRAINT user_preferences_timezone_not_empty CHECK (((timezone IS NULL) OR (timezone <> ''::text)))
@@ -2393,6 +2394,13 @@ COMMENT ON COLUMN public.user_preferences.auto_scale_open_food_facts_imports IS 
 --
 
 COMMENT ON COLUMN public.user_preferences.auto_scale_online_imports IS 'When enabled, nutrition values from all online database imports will auto-scale when the serving size is changed in the Edit Food Details dialog';
+
+
+--
+-- Name: COLUMN user_preferences.include_meals_in_food_search; Type: COMMENT; Schema: public; Owner: -
+--
+
+COMMENT ON COLUMN public.user_preferences.include_meals_in_food_search IS 'When enabled, the Database food-search tab also returns saved meals alongside foods. Default false.';
 
 
 --

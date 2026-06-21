@@ -50,6 +50,7 @@ const FoodSettingsScreen: React.FC<FoodSettingsScreenProps> = ({ navigation }) =
   const autoScale = preferences?.auto_scale_open_food_facts_imports ?? true;
   const barcodeFallback = preferences?.barcode_fallback_open_food_facts ?? true;
   const showNetCarbs = preferences?.show_net_carbs ?? false;
+  const includeMealsInSearch = preferences?.include_meals_in_food_search ?? false;
 
   const mutation = useMutation({
     mutationFn: (data: Partial<UserPreferences>) => updatePreferences(data),
@@ -94,6 +95,11 @@ const FoodSettingsScreen: React.FC<FoodSettingsScreenProps> = ({ navigation }) =
 
   const handleShowNetCarbsToggle = useCallback(
     (value: boolean) => mutation.mutate({ show_net_carbs: value }),
+    [mutation],
+  );
+
+  const handleIncludeMealsToggle = useCallback(
+    (value: boolean) => mutation.mutate({ include_meals_in_food_search: value }),
     [mutation],
   );
 
@@ -149,6 +155,24 @@ const FoodSettingsScreen: React.FC<FoodSettingsScreenProps> = ({ navigation }) =
           </View>
           <Text className="text-text-secondary text-sm mt-4">
             Used when searching for foods by name.
+          </Text>
+        </View>
+
+        {/* Include Meals in Food Search */}
+        <View className="bg-surface rounded-xl p-3 mb-4 shadow-sm">
+          <View className="flex-row justify-between items-center">
+            <Text className="text-base font-semibold text-text-primary flex-shrink">
+              Include Meals in Food Search
+            </Text>
+            <Switch
+              onValueChange={handleIncludeMealsToggle}
+              value={includeMealsInSearch}
+              trackColor={{ false: formDisabled, true: formEnabled }}
+              thumbColor="#FFFFFF"
+            />
+          </View>
+          <Text className="text-text-secondary text-sm mt-4">
+            When on, a food search returns your saved meals as well as individual foods, so one search covers both.
           </Text>
         </View>
 

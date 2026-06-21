@@ -46,6 +46,8 @@ export const PreferenceSettings = () => {
     setAutoScaleOpenFoodFactsImports, // Add auto-scale preference
     autoScaleOnlineImports,
     setAutoScaleOnlineImports,
+    includeMealsInFoodSearch,
+    setIncludeMealsInFoodSearch,
     setLanguage,
     language,
     loggingLevel,
@@ -76,6 +78,7 @@ export const PreferenceSettings = () => {
         itemDisplayLimit,
         autoScaleOpenFoodFactsImports,
         autoScaleOnlineImports,
+        includeMealsInFoodSearch,
         language,
         firstDayOfWeek,
         timezone,
@@ -430,6 +433,27 @@ export const PreferenceSettings = () => {
               id="auto-scale-online-imports"
               checked={autoScaleOnlineImports}
               onCheckedChange={setAutoScaleOnlineImports}
+            />
+          </div>
+          <div className="flex items-center justify-between col-span-full py-2">
+            <div className="space-y-0.5">
+              <Label htmlFor="include-meals-in-food-search">
+                {t(
+                  'settings.preferences.includeMealsInFoodSearch',
+                  'Include meals in food search'
+                )}
+              </Label>
+              <p className="text-sm text-muted-foreground">
+                {t(
+                  'settings.preferences.includeMealsInFoodSearchHint',
+                  'When on, a food search returns your saved meals as well as individual foods, so one search covers both.'
+                )}
+              </p>
+            </div>
+            <Switch
+              id="include-meals-in-food-search"
+              checked={includeMealsInFoodSearch}
+              onCheckedChange={setIncludeMealsInFoodSearch}
             />
           </div>
         </div>

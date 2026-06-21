@@ -45,6 +45,10 @@ type FoodSection = {
   data: (FoodItem | TopFoodItem)[];
 };
 
+// A row in the Search tab results: either a database food or, when the user has
+// opted into combined search, one of their saved meals.
+type SearchResultRow = { kind: 'food'; food: FoodItem } | { kind: 'meal'; meal: Meal };
+
 type TabKey = FoodSearchTab;
 
 const ALL_TABS: { key: TabKey; label: string }[] = [
@@ -87,6 +91,12 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
     enabled: isConnected && activeTab === 'search',
   });
 
+  // When the user has opted in (Settings > Food Settings), the Search (database)
+  // tab also returns saved meals alongside foods so one search covers both.
+  // Disabled in meal-builder mode, where meals can't be nested.
+  const includeMealsInSearch =
+    !isMealBuilderMode && (preferences?.include_meals_in_food_search ?? false);
+
   const { meals, isLoading: isMealsLoading, isError: isMealsError, refetch: refetchMeals } = useMeals({
     enabled: isConnected && activeTab === 'meal' && !isMealBuilderMode,
   });
@@ -96,7 +106,11 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
     isSearchActive: isMealSearchActive,
     isSearchError: isMealSearchError,
   } = useMealSearch(searchText, {
-    enabled: isConnected && activeTab === 'meal' && !isMealBuilderMode,
+    enabled:
+      isConnected &&
+      !isMealBuilderMode &&
+      (activeTab === 'meal' ||
+        (activeTab === 'search' && includeMealsInSearch && searchText.trim() !== '')),
   });
 
   const {
@@ -239,6 +253,20 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
     return allSections.filter((section) => section.data.length > 0);
   }, [recentFoods, topFoods]);
 
+  // Foods first, then saved meals, mirroring the web Database tab ordering.
+  const combinedSearchRows = useMemo<SearchResultRow[]>(() => {
+    const foodRows: SearchResultRow[] = (searchResults || []).map((food) => ({
+      kind: 'food',
+      food,
+    }));
+    if (!includeMealsInSearch || searchText.trim() === '') return foodRows;
+    const mealRows: SearchResultRow[] = (mealSearchResults || []).map((meal) => ({
+      kind: 'meal',
+      meal,
+    }));
+    return [...foodRows, ...mealRows];
+  }, [searchResults, mealSearchResults, includeMealsInSearch, searchText]);
+
   const trailingActionLabel =
     !isMealBuilderMode && activeTab === 'meal' ? 'Create Meal' : 'Add Food';
 
@@ -378,7 +406,11 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
   };
 
   const renderSearchResults = () => {
-    if (isSearching && searchResults.length === 0) {
+    const isLoadingResults =
+      (isSearching || (includeMealsInSearch && isMealSearching)) &&
+      combinedSearchRows.length === 0;
+
+    if (isLoadingResults) {
       return (
         <>
           {renderTabSwitcherBar()}
@@ -403,13 +435,13 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
       );
     }
 
-    if (searchResults.length === 0) {
+    if (combinedSearchRows.length === 0) {
       return (
         <>
           {renderTabSwitcherBar()}
           <View className="flex-1 justify-center items-center px-6">
             <Text className="text-text-secondary text-base text-center mb-4">
-              No matching foods found
+              {includeMealsInSearch ? 'No matching foods or meals found' : 'No matching foods found'}
             </Text>
             {!isMealBuilderMode ? (
               <Button
@@ -429,9 +461,9 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
 
     return (
       <FlatList
-        data={searchResults}
-        keyExtractor={(item) => item.id}
-        renderItem={renderItem}
+        data={combinedSearchRows}
+        keyExtractor={(item) => (item.kind === 'meal' ? `meal-${item.meal.id}` : `food-${item.food.id}`)}
+        renderItem={renderSearchResultRow}
         keyboardShouldPersistTaps="handled"
         keyboardDismissMode="on-drag"
         contentContainerClassName="pb-safe-or-4"
@@ -510,6 +542,13 @@ const FoodSearchScreen: React.FC<FoodSearchScreenProps> = ({ navigation, route }
       onPress={() => showFoodInfo(mealToFoodInfo(item))}
     />
   );
+
+  const renderSearchResultRow = ({ item, index }: { item: SearchResultRow; index: number }) => {
+    if (item.kind === 'meal') {
+      return renderMealRow(item.meal, index === combinedSearchRows.length - 1);
+    }
+    return renderItem({ item: item.food });
+  };
 
   const renderMealSearchResults = () => {
     if (isMealSearching && mealSearchResults.length === 0) {

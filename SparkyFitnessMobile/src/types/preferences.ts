@@ -23,6 +23,9 @@ export interface UserPreferences {
   calorie_goal_adjustment_mode?: string;
   auto_scale_open_food_facts_imports?: boolean;
   auto_scale_online_imports?: boolean;
+  /** When on, the Search (database) tab also returns saved meals alongside foods
+   *  so a single search covers both (server default: false). */
+  include_meals_in_food_search?: boolean;
   barcode_fallback_open_food_facts?: boolean;
   exercise_calorie_percentage?: number;
   activity_level?: string;

@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -109,12 +109,14 @@ const EnhancedFoodSearch = ({
     convertEnergy,
     getEnergyUnitString,
     autoScaleOpenFoodFactsImports,
+    includeMealsInFoodSearch,
   } = usePreferences();
   const isMobile = useIsMobile();
   const platform = isMobile ? 'mobile' : 'desktop';
 
   const [searchTerm, setSearchTerm] = useState('');
   const [meals, setMeals] = useState<Meal[]>([]);
+  const [isMealLoading, setIsMealLoading] = useState(false);
   const getInitialActiveTab = () => {
     if (!hideDatabaseTab) return 'database';
     if (!hideMealTab) return 'meal';
@@ -163,7 +165,17 @@ const EnhancedFoodSearch = ({
   const recentFoods = recentTopData?.recentFoods || [];
   const topFoods = recentTopData?.topFoods || [];
   const foods = searchData?.searchResults || [];
-  const loading = isFetchingRecent || isFetchingSearch || isOnlineLoading;
+  const loading =
+    isFetchingRecent || isFetchingSearch || isOnlineLoading || isMealLoading;
+  // Only take over the results area with the spinner when there is nothing to
+  // show yet. Once any results are present (e.g. foods loaded while meals are
+  // still in flight), keep them visible and let the rest stream in, instead of
+  // pushing loaded rows down behind a full-width spinner.
+  const showSearchSpinner =
+    loading &&
+    foods.length === 0 &&
+    meals.length === 0 &&
+    externalResults.length === 0;
 
   const selectedFoodDataProvider =
     manualProviderId ||
@@ -185,26 +197,73 @@ const EnhancedFoodSearch = ({
   const [hasOnlineSearchBeenPerformed, setHasOnlineSearchBeenPerformed] =
     useState(false);
 
+  // Guards against out-of-order resolution: rapid typing can leave several meal
+  // fetches in flight, so only the most recent call is allowed to write state.
+  const mealSearchSeq = useRef(0);
   const handleMealSearch = useCallback(
     async (term: string) => {
-      const results = await queryClient.fetchQuery(
-        mealSearchOptions('all', term)
-      );
-      setMeals(results);
-    },
-    [queryClient]
-  );
-  useEffect(() => {
-    const handler = setTimeout(() => {
-      if (activeTab === 'meal') {
-        handleMealSearch(searchTerm);
+      const seq = ++mealSearchSeq.current;
+      setIsMealLoading(true);
+      try {
+        const results = await queryClient.fetchQuery(
+          mealSearchOptions('all', term)
+        );
+        if (seq === mealSearchSeq.current) {
+          setMeals(results);
+        }
+      } catch {
+        if (seq === mealSearchSeq.current) {
+          toast({
+            title: t('common.error', 'Error'),
+            description: t(
+              'enhancedFoodSearch.failedToSearchMeals',
+              'Failed to search meals.'
+            ),
+            variant: 'destructive',
+          });
+        }
+      } finally {
+        if (seq === mealSearchSeq.current) {
+          setIsMealLoading(false);
+        }
       }
+    },
+    [queryClient, t]
+  );
+  // Meals are fetched on the dedicated Meals tab, and — when the user has opted
+  // in via Settings > Preferences — also alongside foods on the Database tab so
+  // a single search covers both. The Database-tab case only runs once there's a
+  // search term (the empty Database view shows recent/top foods, not meals).
+  const includeMealsOnDatabaseTab =
+    activeTab === 'database' &&
+    includeMealsInFoodSearch &&
+    searchTerm.trim() !== '';
+  useEffect(() => {
+    if (activeTab !== 'meal' && !includeMealsOnDatabaseTab) {
+      // Meals no longer apply (tab changed, toggle off, or query cleared).
+      // Bump the sequence so any in-flight fetch is discarded when it resolves.
+      mealSearchSeq.current += 1;
+      setMeals([]);
+      setIsMealLoading(false);
+      return;
+    }
+    // On the merged Database search, drop the previous term's meals immediately
+    // so they can't render next to fresh food results during the debounce. Use a
+    // functional update so an already-empty list is a no-op (no extra re-render).
+    if (includeMealsOnDatabaseTab) {
+      setMeals((prev) => (prev.length > 0 ? [] : prev));
+    }
+    // Show loading immediately (not after the debounce) so the empty-state
+    // message can't flash while the meal search is still pending.
+    setIsMealLoading(true);
+    const handler = setTimeout(() => {
+      handleMealSearch(searchTerm);
     }, 500);
 
     return () => {
       clearTimeout(handler);
     };
-  }, [searchTerm, activeTab, handleMealSearch]);
+  }, [searchTerm, activeTab, includeMealsOnDatabaseTab, handleMealSearch]);
 
   const searchBarcode = async (barcode: string) => {
     setIsOnlineLoading(true);
@@ -650,7 +709,7 @@ const EnhancedFoodSearch = ({
       </div>
 
       <div className="space-y-2 max-h-96 overflow-y-auto">
-        {loading && (
+        {showSearchSpinner && (
           <div className="text-center py-8 text-gray-500">
             <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" />
             {t('enhancedFoodSearch.searchingFoods', 'Searching foods...')}
@@ -762,6 +821,19 @@ const EnhancedFoodSearch = ({
               item={food}
               nutrientConfig={nutrientConfig}
               onCardClick={() => onFoodSelect(food, 'food')}
+            />
+          ))}
+
+        {activeTab === 'database' &&
+          searchTerm.trim() !== '' &&
+          includeMealsInFoodSearch &&
+          meals.map((meal) => (
+            <FoodResultCard
+              key={`meal-${meal.id}`}
+              item={meal}
+              isMeal={true}
+              nutrientConfig={nutrientConfig}
+              onCardClick={() => onFoodSelect(meal, 'meal')}
             />
           ))}
       </div>

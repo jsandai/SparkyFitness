@@ -90,6 +90,7 @@ interface PreferencesContextType {
   energyUnit: EnergyUnit;
   autoScaleOpenFoodFactsImports: boolean;
   autoScaleOnlineImports: boolean;
+  includeMealsInFoodSearch: boolean;
   nutrientDisplayPreferences: NutrientPreference[];
   water_display_unit: WaterDisplayUnit;
   language: string;
@@ -131,6 +132,7 @@ interface PreferencesContextType {
   setEnergyUnit: (unit: EnergyUnit) => void;
   setAutoScaleOpenFoodFactsImports: (enabled: boolean) => void;
   setAutoScaleOnlineImports: (enabled: boolean) => void;
+  setIncludeMealsInFoodSearch: (enabled: boolean) => void;
   loadNutrientDisplayPreferences: () => Promise<void>;
   setWaterDisplayUnit: (unit: WaterDisplayUnit) => void;
   setLanguage: (language: string) => void;
@@ -194,6 +196,7 @@ export interface DefaultPreferences {
   energy_unit: EnergyUnit;
   auto_scale_open_food_facts_imports: boolean;
   auto_scale_online_imports: boolean;
+  include_meals_in_food_search: boolean;
   selected_diet: string;
   updated_at?: string;
   default_food_data_provider_id: string | null;
@@ -277,6 +280,10 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
     useState<boolean>(false);
   const [autoScaleOnlineImports, setAutoScaleOnlineImportsState] =
     useState<boolean>(true);
+  // When enabled, the Database food-search tab also returns saved meals
+  // alongside foods. Default false matches the server migration (DEFAULT FALSE).
+  const [includeMealsInFoodSearch, setIncludeMealsInFoodSearchState] =
+    useState<boolean>(false);
   const [nutrientDisplayPreferences, setNutrientDisplayPreferences] = useState<
     NutrientPreference[]
   >([]);
@@ -576,6 +583,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
         energy_unit: 'kcal' as const,
         auto_scale_open_food_facts_imports: false,
         auto_scale_online_imports: true,
+        include_meals_in_food_search: false,
         selected_diet: 'balanced',
         first_day_of_week: 0,
         show_net_carbs: false,
@@ -660,6 +668,9 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
           data.auto_scale_open_food_facts_imports ?? false
         );
         setAutoScaleOnlineImportsState(data.auto_scale_online_imports ?? true);
+        setIncludeMealsInFoodSearchState(
+          data.include_meals_in_food_search ?? false
+        );
         setBmrAlgorithmState(
           data.bmr_algorithm || BmrAlgorithm.MIFFLIN_ST_JEOR
         );
@@ -764,6 +775,12 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
             String(updates.auto_scale_online_imports)
           );
         }
+        if (updates.include_meals_in_food_search !== undefined) {
+          localStorage.setItem(
+            'includeMealsInFoodSearch',
+            String(updates.include_meals_in_food_search)
+          );
+        }
         return;
       }
 
@@ -829,6 +846,8 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
           autoScaleOpenFoodFactsImports,
         auto_scale_online_imports:
           newPrefs?.autoScaleOnlineImports ?? autoScaleOnlineImports,
+        include_meals_in_food_search:
+          newPrefs?.includeMealsInFoodSearch ?? includeMealsInFoodSearch,
         bmr_algorithm: newPrefs?.bmrAlgorithm ?? bmrAlgorithm,
         body_fat_algorithm: newPrefs?.bodyFatAlgorithm ?? bodyFatAlgorithm,
         include_bmr_in_net_calories:
@@ -891,6 +910,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       energyUnit,
       autoScaleOpenFoodFactsImports,
       autoScaleOnlineImports,
+      includeMealsInFoodSearch,
       bmrAlgorithm,
       bodyFatAlgorithm,
       includeBmrInNetCalories,
@@ -1015,6 +1035,14 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
     [saveAllPreferences]
   );
 
+  const setIncludeMealsInFoodSearch = useCallback(
+    (enabled: boolean) => {
+      setIncludeMealsInFoodSearchState(enabled);
+      saveAllPreferences({ includeMealsInFoodSearch: enabled });
+    },
+    [saveAllPreferences]
+  );
+
   const setGoalMode = useCallback(
     (mode: GoalMode) => {
       setGoalModeState(mode);
@@ -1094,6 +1122,13 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
           setAutoScaleOnlineImportsState(
             savedAutoScaleOnlineImports === 'true'
           );
+        const savedIncludeMealsInFoodSearch = localStorage.getItem(
+          'includeMealsInFoodSearch'
+        );
+        if (savedIncludeMealsInFoodSearch !== null)
+          setIncludeMealsInFoodSearchState(
+            savedIncludeMealsInFoodSearch === 'true'
+          );
       }
     }
   }, [user, loading, loadPreferences, loadNutrientDisplayPreferences]);
@@ -1121,6 +1156,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       energyUnit,
       autoScaleOpenFoodFactsImports,
       autoScaleOnlineImports,
+      includeMealsInFoodSearch,
       nutrientDisplayPreferences,
       water_display_unit: waterDisplayUnit,
       language,
@@ -1159,6 +1195,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       setEnergyUnit,
       setAutoScaleOpenFoodFactsImports,
       setAutoScaleOnlineImports,
+      setIncludeMealsInFoodSearch,
       loadNutrientDisplayPreferences,
       setWaterDisplayUnit: setWaterDisplayUnitState,
       setLanguage: setLanguageState,
@@ -1205,6 +1242,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       energyUnit,
       autoScaleOpenFoodFactsImports,
       autoScaleOnlineImports,
+      includeMealsInFoodSearch,
       nutrientDisplayPreferences,
       waterDisplayUnit,
       language,
@@ -1243,6 +1281,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       setEnergyUnit,
       setAutoScaleOpenFoodFactsImports,
       setAutoScaleOnlineImports,
+      setIncludeMealsInFoodSearch,
       loadNutrientDisplayPreferences,
       convertWeight,
       convertMeasurement,
