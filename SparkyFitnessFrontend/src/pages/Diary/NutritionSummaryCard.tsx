@@ -117,7 +117,7 @@ const NutritionSummaryCard = ({
         <div
           className="grid gap-x-4 gap-y-6"
           style={{
-            gridTemplateColumns: `repeat(auto-fit, minmax(${isMobile ? '80px' : '120px'}, 1fr))`,
+            gridTemplateColumns: `repeat(auto-fit, minmax(${isMobile ? '80px' : '84px'}, 1fr))`,
           }}
         >
           {visibleNutrients.map((nutrient) => {
@@ -170,11 +170,13 @@ const NutritionSummaryCard = ({
 
             return (
               <div key={nutrient} className="text-center">
-                <div className={`text-lg sm:text-xl font-bold ${colorClass}`}>
+                <div
+                  className={`text-lg sm:text-xl font-bold whitespace-nowrap ${colorClass}`}
+                >
                   {displayTotal}
                   {unit}
                 </div>
-                <div className="text-xs text-gray-500 leading-tight">
+                <div className="text-xs text-gray-500 leading-tight whitespace-nowrap">
                   {t('diary.of', 'of')} {displayGoal}
                   {unit}
                 </div>
