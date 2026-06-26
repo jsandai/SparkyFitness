@@ -358,6 +358,17 @@ describe('published (flat) chatbot tool schemas', () => {
       }
     }
   );
+
+  // Regex lookaround (e.g. Zod v4's .email() pattern) is rejected by the
+  // RE2-style validators some providers (Groq, xAI) apply to tool parameter
+  // schemas, which fails the whole request. Keep published schemas RE2-safe.
+  it.each(flatCases)(
+    '$name has no regex lookaround in its published JSON schema',
+    ({ schema }) => {
+      const serialized = JSON.stringify(toJson(schema));
+      expect(serialized).not.toMatch(/\(\?[=!<]/);
+    }
+  );
 });
 
 describe('strict discriminated-union validation schemas', () => {
