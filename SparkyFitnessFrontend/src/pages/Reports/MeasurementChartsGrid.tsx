@@ -15,6 +15,7 @@ import { Scale, Activity } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import ZoomableChart from '@/components/ZoomableChart';
 import { usePreferences } from '@/contexts/PreferencesContext';
+import { useIsMobile } from '@/hooks/use-mobile';
 import { info, error } from '@/utils/logging';
 import { parseISO } from 'date-fns';
 import { formatWeight, formatMeasurement } from '@/utils/numberFormatting';
@@ -41,7 +42,13 @@ const MeasurementChartsGrid = ({
     measurementUnit,
     convertWeight,
     convertMeasurement,
+    reportDisplayPreferences,
   } = usePreferences();
+  const isMobile = useIsMobile();
+  const platform = isMobile ? 'mobile' : 'desktop';
+  const measurementChartPreferences = reportDisplayPreferences.find(
+    (p) => p.view_group === 'measurement_chart' && p.platform === platform
+  );
 
   const chartData = React.useMemo(() => {
     return measurementData.map((d) => ({
@@ -97,6 +104,94 @@ const MeasurementChartsGrid = ({
     convertWeight,
     convertMeasurement,
   ]);
+
+  const allMeasurementCharts = React.useMemo(
+    () => [
+      {
+        titleKey: 'reports.weight',
+        defaultTitle: 'Weight',
+        dataKey: 'weight',
+        rawKey: 'rawWeight',
+        unit: weightUnit,
+        stroke: '#e74c3c',
+        icon: <Scale className="w-4 h-4 mr-2" />,
+        formatValue: (val: number) => formatWeight(val, weightUnit),
+        axisTickFormat: (value: number) =>
+          value.toFixed(getPrecision('weight', weightUnit)),
+      },
+      {
+        titleKey: 'reports.neck',
+        defaultTitle: 'Neck',
+        dataKey: 'neck',
+        rawKey: 'rawNeck',
+        unit: measurementUnit,
+        stroke: '#3498db',
+        formatValue: (val: number) => formatMeasurement(val, measurementUnit),
+        axisTickFormat: (value: number) =>
+          value.toFixed(getPrecision('measurement', measurementUnit)),
+      },
+      {
+        titleKey: 'reports.waist',
+        defaultTitle: 'Waist',
+        dataKey: 'waist',
+        rawKey: 'rawWaist',
+        unit: measurementUnit,
+        stroke: '#e74c3c',
+        formatValue: (val: number) => formatMeasurement(val, measurementUnit),
+        axisTickFormat: (value: number) =>
+          value.toFixed(getPrecision('measurement', measurementUnit)),
+      },
+      {
+        titleKey: 'reports.hips',
+        defaultTitle: 'Hips',
+        dataKey: 'hips',
+        rawKey: 'rawHips',
+        unit: measurementUnit,
+        stroke: '#f39c12',
+        formatValue: (val: number) => formatMeasurement(val, measurementUnit),
+        axisTickFormat: (value: number) =>
+          value.toFixed(getPrecision('measurement', measurementUnit)),
+      },
+      {
+        titleKey: 'reports.height',
+        defaultTitle: 'Height',
+        dataKey: 'height',
+        rawKey: 'rawHeight',
+        unit: measurementUnit,
+        stroke: '#9b59b6',
+        formatValue: (val: number) => formatMeasurement(val, measurementUnit),
+        axisTickFormat: (value: number) =>
+          value.toFixed(getPrecision('measurement', measurementUnit)),
+      },
+      {
+        titleKey: 'reports.bodyFatPercentage',
+        defaultTitle: 'Body Fat %',
+        dataKey: 'body_fat_percentage',
+        rawKey: 'rawBodyFat',
+        unit: '%',
+        stroke: '#1abc9c',
+        formatValue: (val: number) => `${val.toFixed(1)}%`,
+        axisTickFormat: (value: number) => value.toFixed(1),
+      },
+    ],
+    [weightUnit, measurementUnit]
+  );
+
+  const visibleMeasurementCharts = React.useMemo(() => {
+    if (
+      measurementChartPreferences &&
+      measurementChartPreferences.visible_items
+    ) {
+      return measurementChartPreferences.visible_items
+        .map((key) =>
+          allMeasurementCharts.find((chart) => chart.dataKey === key)
+        )
+        .filter(
+          (chart): chart is NonNullable<typeof chart> => chart !== undefined
+        );
+    }
+    return allMeasurementCharts;
+  }, [measurementChartPreferences, allMeasurementCharts]);
 
   info(loggingLevel, 'MeasurementChartsGrid: Rendering component.');
 
@@ -171,78 +266,7 @@ const MeasurementChartsGrid = ({
       {/* Body Measurements Charts */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 min-w-0">
         {/* Generate Measurement Charts */}
-        {[
-          {
-            titleKey: 'reports.weight',
-            defaultTitle: 'Weight',
-            dataKey: 'weight',
-            rawKey: 'rawWeight',
-            unit: weightUnit,
-            stroke: '#e74c3c',
-            icon: <Scale className="w-4 h-4 mr-2" />,
-            formatValue: (val: number) => formatWeight(val, weightUnit),
-            axisTickFormat: (value: number) =>
-              value.toFixed(getPrecision('weight', weightUnit)),
-          },
-          {
-            titleKey: 'reports.neck',
-            defaultTitle: 'Neck',
-            dataKey: 'neck',
-            rawKey: 'rawNeck',
-            unit: measurementUnit,
-            stroke: '#3498db',
-            formatValue: (val: number) =>
-              formatMeasurement(val, measurementUnit),
-            axisTickFormat: (value: number) =>
-              value.toFixed(getPrecision('measurement', measurementUnit)),
-          },
-          {
-            titleKey: 'reports.waist',
-            defaultTitle: 'Waist',
-            dataKey: 'waist',
-            rawKey: 'rawWaist',
-            unit: measurementUnit,
-            stroke: '#e74c3c',
-            formatValue: (val: number) =>
-              formatMeasurement(val, measurementUnit),
-            axisTickFormat: (value: number) =>
-              value.toFixed(getPrecision('measurement', measurementUnit)),
-          },
-          {
-            titleKey: 'reports.hips',
-            defaultTitle: 'Hips',
-            dataKey: 'hips',
-            rawKey: 'rawHips',
-            unit: measurementUnit,
-            stroke: '#f39c12',
-            formatValue: (val: number) =>
-              formatMeasurement(val, measurementUnit),
-            axisTickFormat: (value: number) =>
-              value.toFixed(getPrecision('measurement', measurementUnit)),
-          },
-          {
-            titleKey: 'reports.height',
-            defaultTitle: 'Height',
-            dataKey: 'height',
-            rawKey: 'rawHeight',
-            unit: measurementUnit,
-            stroke: '#9b59b6',
-            formatValue: (val: number) =>
-              formatMeasurement(val, measurementUnit),
-            axisTickFormat: (value: number) =>
-              value.toFixed(getPrecision('measurement', measurementUnit)),
-          },
-          {
-            titleKey: 'reports.bodyFatPercentage',
-            defaultTitle: 'Body Fat %',
-            dataKey: 'body_fat_percentage',
-            rawKey: 'rawBodyFat',
-            unit: '%',
-            stroke: '#1abc9c',
-            formatValue: (val: number) => `${val.toFixed(1)}%`,
-            axisTickFormat: (value: number) => value.toFixed(1),
-          },
-        ].map((metric) => (
+        {visibleMeasurementCharts.map((metric) => (
           <ZoomableChart
             key={metric.dataKey}
             title={`${t(metric.titleKey, metric.defaultTitle)} (${metric.unit})`}

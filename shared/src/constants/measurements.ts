@@ -64,3 +64,18 @@ export const getPrecision = (
 
   return 0;
 };
+
+/**
+ * Canonical measurement chart item keys for the Reports "Measurement Chart" view group,
+ * in default display order. This set is fixed (no dynamic/custom items).
+ */
+export const MEASUREMENT_CHART_ITEMS = [
+  'weight',
+  'neck',
+  'waist',
+  'hips',
+  'height',
+  'body_fat_percentage',
+] as const;
+
+export type MeasurementChartItem = (typeof MEASUREMENT_CHART_ITEMS)[number];

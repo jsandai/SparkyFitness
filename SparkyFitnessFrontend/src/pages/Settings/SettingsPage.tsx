@@ -17,6 +17,7 @@ import CustomCategoryManager from './CustomCategoryManager';
 import MealTypeManager from './MealTypeManager';
 import ExternalProviderSettings from './ExternalProviderSettings';
 import NutrientDisplaySettings from './NutrientDisplaySettings';
+import ReportsDisplaySettings from './ReportsDisplaySettings';
 import {
   Accordion,
   AccordionItem,
@@ -148,6 +149,25 @@ const Settings = () => {
           </AccordionTrigger>
           <AccordionContent className="p-4 pt-0">
             <NutrientDisplaySettings />
+          </AccordionContent>
+        </AccordionItem>
+
+        <AccordionItem
+          value="reports-display"
+          className="border rounded-lg mb-4"
+        >
+          <AccordionTrigger
+            className="flex items-center gap-2 p-4 hover:no-underline"
+            description={t(
+              'settings.reportsDisplay.description',
+              'Choose which measurement charts to display in the Reports section'
+            )}
+          >
+            <ListChecks className="h-5 w-5" />
+            {t('settings.reportsDisplay.title', 'Reports Display')}
+          </AccordionTrigger>
+          <AccordionContent className="p-4 pt-0">
+            <ReportsDisplaySettings />
           </AccordionContent>
         </AccordionItem>
 

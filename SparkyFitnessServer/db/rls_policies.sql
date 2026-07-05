@@ -56,6 +56,7 @@ BEGIN
     'user_ignored_updates',
     'user_meal_visibilities',
     'user_nutrient_display_preferences',
+    'user_report_display_preferences',
     'user_oidc_links',
     'user_preferences',
     'user_water_containers',
@@ -566,6 +567,12 @@ SELECT create_diary_policy('user_allergen_preferences');
 -- Nutrient display preferences: delegates can read but only owner can rearrange their own columns.
 CREATE POLICY select_policy ON public.user_nutrient_display_preferences FOR SELECT TO PUBLIC USING (has_profile_read_access(user_id));
 CREATE POLICY modify_policy ON public.user_nutrient_display_preferences FOR ALL TO PUBLIC
+USING (authenticated_user_id() = user_id)
+WITH CHECK (authenticated_user_id() = user_id);
+
+-- Report display preferences: delegates can read but only owner can rearrange their own columns.
+CREATE POLICY select_policy ON public.user_report_display_preferences FOR SELECT TO PUBLIC USING (has_profile_read_access(user_id));
+CREATE POLICY modify_policy ON public.user_report_display_preferences FOR ALL TO PUBLIC
 USING (authenticated_user_id() = user_id)
 WITH CHECK (authenticated_user_id() = user_id);
 

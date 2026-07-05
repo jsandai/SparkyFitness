@@ -29,6 +29,11 @@ export const preferencesOptions = {
       queryKey: preferencesKeys.nutrients(),
       queryFn: () => apiCall('/preferences/nutrient-display'),
     }),
+  reports: () =>
+    queryOptions({
+      queryKey: preferencesKeys.reports(),
+      queryFn: () => apiCall('/preferences/report-display'),
+    }),
 };
 
 export const useUpdatePreferencesMutation = () => {

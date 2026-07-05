@@ -73,6 +73,11 @@ interface NutrientPreference {
   platform: 'desktop' | 'mobile';
   visible_nutrients: string[];
 }
+interface ReportPreference {
+  view_group: string;
+  platform: 'desktop' | 'mobile';
+  visible_items: string[];
+}
 interface PreferencesContextType {
   weightUnit: WeightUnit;
   measurementUnit: MeasurementUnit;
@@ -91,6 +96,7 @@ interface PreferencesContextType {
   autoScaleOpenFoodFactsImports: boolean;
   autoScaleOnlineImports: boolean;
   nutrientDisplayPreferences: NutrientPreference[];
+  reportDisplayPreferences: ReportPreference[];
   water_display_unit: WaterDisplayUnit;
   addExerciseWaterToGoal: boolean;
   language: string;
@@ -135,6 +141,7 @@ interface PreferencesContextType {
   setAutoScaleOpenFoodFactsImports: (enabled: boolean) => void;
   setAutoScaleOnlineImports: (enabled: boolean) => void;
   loadNutrientDisplayPreferences: () => Promise<void>;
+  loadReportDisplayPreferences: () => Promise<void>;
   setWaterDisplayUnit: (unit: WaterDisplayUnit) => void;
   setAddExerciseWaterToGoal: (enabled: boolean) => void;
   setLanguage: (language: string) => void;
@@ -285,6 +292,9 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
     useState<boolean>(true);
   const [nutrientDisplayPreferences, setNutrientDisplayPreferences] = useState<
     NutrientPreference[]
+  >([]);
+  const [reportDisplayPreferences, setReportDisplayPreferences] = useState<
+    ReportPreference[]
   >([]);
   const [waterDisplayUnit, setWaterDisplayUnitState] = useState<
     'ml' | 'oz' | 'liter'
@@ -736,6 +746,16 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
     }
   }, [user, queryClient]);
 
+  const loadReportDisplayPreferences = useCallback(async () => {
+    if (!user) return;
+    try {
+      const data = await queryClient.fetchQuery(preferencesOptions.reports());
+      setReportDisplayPreferences(data);
+    } catch (err: unknown) {
+      console.error('Error fetching report display preferences:', err);
+    }
+  }, [user, queryClient]);
+
   // --- Persistence and Updates ---
 
   const updatePreferences = useCallback(
@@ -1077,6 +1097,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       if (user) {
         loadPreferences();
         loadNutrientDisplayPreferences();
+        loadReportDisplayPreferences();
       } else {
         const savedWeightUnit = localStorage.getItem(
           'weightUnit'
@@ -1120,7 +1141,13 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
           );
       }
     }
-  }, [user, loading, loadPreferences, loadNutrientDisplayPreferences]);
+  }, [
+    user,
+    loading,
+    loadPreferences,
+    loadNutrientDisplayPreferences,
+    loadReportDisplayPreferences,
+  ]);
 
   // --- Context Value Memoization ---
 
@@ -1146,6 +1173,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       autoScaleOpenFoodFactsImports,
       autoScaleOnlineImports,
       nutrientDisplayPreferences,
+      reportDisplayPreferences,
       water_display_unit: waterDisplayUnit,
       addExerciseWaterToGoal,
       language,
@@ -1187,6 +1215,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       setAutoScaleOpenFoodFactsImports,
       setAutoScaleOnlineImports,
       loadNutrientDisplayPreferences,
+      loadReportDisplayPreferences,
       setWaterDisplayUnit: setWaterDisplayUnitState,
       setAddExerciseWaterToGoal: setAddExerciseWaterToGoalState,
       setLanguage: setLanguageState,
@@ -1234,6 +1263,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       autoScaleOpenFoodFactsImports,
       autoScaleOnlineImports,
       nutrientDisplayPreferences,
+      reportDisplayPreferences,
       waterDisplayUnit,
       addExerciseWaterToGoal,
       language,
@@ -1274,6 +1304,7 @@ export const PreferencesProvider: React.FC<{ children: React.ReactNode }> = ({
       setAutoScaleOpenFoodFactsImports,
       setAutoScaleOnlineImports,
       loadNutrientDisplayPreferences,
+      loadReportDisplayPreferences,
       convertWeight,
       convertMeasurement,
       convertDistance,

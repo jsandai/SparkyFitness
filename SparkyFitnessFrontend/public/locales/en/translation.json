@@ -783,6 +783,26 @@
       "title": "Nutrient Display",
       "description": "Choose which nutrients to display in food and meal views"
     },
+    "reportsDisplay": {
+      "title": "Reports Display",
+      "description": "Choose which measurement charts to display in the Reports section",
+      "groupDescription": "Controls which measurement charts are shown on the Reports page.",
+      "desktop": "Desktop",
+      "mobile": "Mobile",
+      "syncWithMobile": "Sync with Mobile",
+      "syncWithDesktop": "Sync with Desktop",
+      "selectAll": "Select All",
+      "clearAll": "Clear All",
+      "resetToDefault": "Reset to Default",
+      "items": {
+        "weight": "Weight",
+        "neck": "Neck",
+        "waist": "Waist",
+        "hips": "Hips",
+        "height": "Height",
+        "body_fat_percentage": "Body Fat %"
+      }
+    },
     "calculationSettings": {
       "title": "Calculation Settings",
       "description": "Manage BMR formulas, body fat algorithms, daily energy adjustments, goal deficit modes, and safety floors."
