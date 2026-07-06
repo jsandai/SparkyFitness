@@ -109,13 +109,17 @@ const WidgetGridInner = ({
   );
 
   // Resync local layout when the widget set changes or the server layout
-  // updates. Optimistic in-flight saves keep updated_at stable, so this does
-  // not fight an in-progress drag.
+  // updates. We skip this entirely while actively editing: a debounced save's
+  // onSuccess writes the server row back with a fresh updated_at, which would
+  // flip syncSig mid-drag and revert the layout to the just-persisted position,
+  // clobbering a rapid follow-up drag. On exiting edit mode the optimistic
+  // cache already holds the latest layout, so the resync is a no-op.
   const syncSig = `${widgetKeys.join(',')}|${saved?.updated_at ?? ''}`;
   useEffect(() => {
+    if (effectiveEditMode) return;
     setLayouts(reconcileLayouts(saved?.layout, widgetKeys, defaults));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [syncSig]);
+  }, [syncSig, effectiveEditMode]);
 
   // Latest full (all-breakpoint) layout, kept in sync by onLayoutChange.
   const latestLayoutsRef = useRef<DashboardLayouts>(layouts);

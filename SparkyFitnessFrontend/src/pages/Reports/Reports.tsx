@@ -152,7 +152,11 @@ const Reports = () => {
   const { data: goalData } = useDailyGoalsRange(startDate, endDate, true, true);
 
   const measurementChartWidgets = useMeasurementChartWidgets({
-    measurementData,
+    // Pass the raw (possibly undefined) value so the hook's stable
+    // EMPTY_MEASUREMENTS fallback is used while loading. The destructured
+    // `measurementData` above defaults to a fresh `[]` each render, which
+    // would defeat that and re-compute every widget.
+    measurementData: reportsData?.measurementData,
   });
 
   const handleStartDateChange = (date: string) => {
