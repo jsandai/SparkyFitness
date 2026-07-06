@@ -169,25 +169,31 @@ const WidgetGridInner = ({
     pendingSaveRef.current = true;
   }, []);
 
+  // Read the freshest hidden set inside the toggle callbacks: rapid successive
+  // Hide/Restore clicks would otherwise capture a stale `hidden` closure and
+  // clobber the prior click's save before the re-render lands.
+  const hiddenRef = useRef(hidden);
+  hiddenRef.current = hidden;
+
   const hideWidget = useCallback(
     (key: string) => {
       if (maximized === key) setMaximized(null);
       save({
         layout: latestLayoutsRef.current,
-        hidden: [...hidden, key],
+        hidden: [...hiddenRef.current, key],
       });
     },
-    [hidden, maximized, save]
+    [maximized, save]
   );
 
   const restoreWidget = useCallback(
     (key: string) => {
       save({
         layout: latestLayoutsRef.current,
-        hidden: hidden.filter((k) => k !== key),
+        hidden: hiddenRef.current.filter((k) => k !== key),
       });
     },
-    [hidden, save]
+    [save]
   );
 
   const handleReset = useCallback(() => {
