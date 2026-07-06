@@ -468,7 +468,9 @@ export function useMeasurementChartWidgets({
                     debounce={100}
                   >
                     <BarChart
-                      data={chartData.filter((d) => d.steps)}
+                      data={chartData.filter(
+                        (d) => d.steps !== undefined && d.steps !== null
+                      )}
                       syncId="nutrition-charts"
                     >
                       <CartesianGrid strokeDasharray="3 3" />
@@ -484,7 +486,9 @@ export function useMeasurementChartWidgets({
                       <YAxis
                         domain={
                           getYAxisDomain(
-                            chartData.filter((d) => d.steps),
+                            chartData.filter(
+                              (d) => d.steps !== undefined && d.steps !== null
+                            ),
                             'steps'
                           ) || undefined
                         }

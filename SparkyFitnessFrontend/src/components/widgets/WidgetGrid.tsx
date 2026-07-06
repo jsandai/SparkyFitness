@@ -342,26 +342,22 @@ const WidgetGrid = ({
   widgets,
   generateDefaultLayouts,
 }: WidgetGridProps) => {
-  const { saved, reset } = useDashboardLayout(pageKey);
+  const { reset } = useDashboardLayout(pageKey);
   const { t } = useTranslation();
-  const [isResetting, setIsResetting] = useState(false);
+  const [resetKey, setResetKey] = useState(0);
 
-  // reset() is an async mutation; reloading immediately would tear down the
-  // React context and cancel the in-flight request before it persists. Wait
-  // for the query cache to settle back to null, then reload.
-  useEffect(() => {
-    if (isResetting && saved === null) {
-      window.location.reload();
-    }
-  }, [isResetting, saved]);
-
+  // reset() is an async mutation whose onSuccess clears the cached layout to
+  // null. Once that settles we bump resetKey to remount the error boundary and
+  // recover the UI cleanly, rather than a full window.location.reload() that
+  // would discard unrelated transient state (selected dates, active tab,
+  // scroll position).
   const handleResetLayout = () => {
-    setIsResetting(true);
-    reset();
+    reset({ onSuccess: () => setResetKey((prev) => prev + 1) });
   };
 
   return (
     <GridErrorBoundary
+      key={resetKey}
       onError={(error) =>
         console.error(`Widget layout render error (${pageKey}):`, error)
       }
