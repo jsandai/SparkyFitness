@@ -72,6 +72,10 @@ class GridErrorBoundary extends Component<
   }
 }
 
+// Stable reference so `hidden`/`handleLayoutChange` deps don't churn when no
+// widgets are hidden (a fresh `[]` each render would invalidate them).
+const EMPTY_HIDDEN: string[] = [];
+
 const WidgetGridInner = ({
   pageKey,
   widgets,
@@ -98,7 +102,7 @@ const WidgetGridInner = ({
     [widgetKeys, generateDefaultLayouts]
   );
 
-  const hidden = useMemo(() => saved?.hidden ?? [], [saved]);
+  const hidden = useMemo(() => saved?.hidden ?? EMPTY_HIDDEN, [saved]);
 
   const [layouts, setLayouts] = useState<DashboardLayouts>(() =>
     reconcileLayouts(saved?.layout, widgetKeys, defaults)
@@ -328,12 +332,22 @@ const WidgetGrid = ({
   widgets,
   generateDefaultLayouts,
 }: WidgetGridProps) => {
-  const { reset } = useDashboardLayout(pageKey);
+  const { saved, reset } = useDashboardLayout(pageKey);
   const { t } = useTranslation();
+  const [isResetting, setIsResetting] = useState(false);
+
+  // reset() is an async mutation; reloading immediately would tear down the
+  // React context and cancel the in-flight request before it persists. Wait
+  // for the query cache to settle back to null, then reload.
+  useEffect(() => {
+    if (isResetting && saved === null) {
+      window.location.reload();
+    }
+  }, [isResetting, saved]);
 
   const handleResetLayout = () => {
+    setIsResetting(true);
     reset();
-    window.location.reload();
   };
 
   return (

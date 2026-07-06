@@ -92,8 +92,12 @@ export function generateReportsMeasurementsDefaultLayouts(
   } satisfies Record<Breakpoint, WidgetLayout[]>;
 }
 
+// Stable fallback so a loading `measurementData` doesn't hand a fresh `[]` to
+// the chart memos each render and cascade re-renders through the widget grid.
+const EMPTY_MEASUREMENTS: CheckInMeasurementsResponse[] = [];
+
 interface UseMeasurementChartWidgetsArgs {
-  measurementData: CheckInMeasurementsResponse[];
+  measurementData?: CheckInMeasurementsResponse[];
 }
 
 /**
@@ -103,7 +107,7 @@ interface UseMeasurementChartWidgetsArgs {
  * hideable/resizable/repositionable widget.
  */
 export function useMeasurementChartWidgets({
-  measurementData,
+  measurementData = EMPTY_MEASUREMENTS,
 }: UseMeasurementChartWidgetsArgs): Widget[] {
   const { t } = useTranslation();
   const {

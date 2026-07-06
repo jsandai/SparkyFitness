@@ -152,7 +152,7 @@ const Reports = () => {
   const { data: goalData } = useDailyGoalsRange(startDate, endDate, true, true);
 
   const measurementChartWidgets = useMeasurementChartWidgets({
-    measurementData: measurementData ?? [],
+    measurementData,
   });
 
   const handleStartDateChange = (date: string) => {
