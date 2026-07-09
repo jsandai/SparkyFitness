@@ -55,7 +55,10 @@ import {
   searchBarcodeV2Options,
   foodDetailsV2Options,
 } from '@/hooks/Foods/useFoodsV2.ts';
-import { mealSearchOptions } from '@/hooks/Foods/useMeals.ts';
+import {
+  mealSearchOptions,
+  useRecentAndTopMealsQuery,
+} from '@/hooks/Foods/useMeals.ts';
 import {
   useAllProvidersFoodSearch,
   type ExternalResultWrapper,
@@ -190,6 +193,14 @@ const EnhancedFoodSearch = ({
       mealType,
       showLocalFoods && isSearchEmpty
     );
+  // Recent + frequent meals for the landing quick-pick list, so the landing
+  // (like the typed search) surfaces both foods and meals. Only fetched when
+  // meals are shown and the query is empty.
+  const {
+    recentMeals,
+    topMeals,
+    isLoading: isLoadingRecentMeals,
+  } = useRecentAndTopMealsQuery(itemDisplayLimit, showMeals && isSearchEmpty);
   const { mutateAsync: importCsvMutation } = useImportCsvMutation();
   const { data: searchData, isFetching: isFetchingSearch } =
     useDatabaseFoodSearchQuery(
@@ -202,6 +213,12 @@ const EnhancedFoodSearch = ({
   const recentFoods = recentTopData?.recentFoods || [];
   const topFoods = recentTopData?.topFoods || [];
   const foods = searchData?.searchResults || [];
+
+  // A frequently logged meal is usually also a recent one, so drop meals from
+  // the Top list that already appear under Recent, to avoid duplicate rows and
+  // duplicate React keys in the landing list.
+  const recentMealIds = new Set(recentMeals.map((meal) => meal.id));
+  const topMealsToShow = topMeals.filter((meal) => !recentMealIds.has(meal.id));
 
   // Active food-category providers: the only valid options for the provider
   // dropdown, so the resolved default must be drawn from this list (not the raw
@@ -989,23 +1006,41 @@ const EnhancedFoodSearch = ({
       </div>
 
       <div className="space-y-2 max-h-96 overflow-y-auto">
-        {/* Landing: recent + top foods (local mode, empty query) */}
+        {/* Landing: recent + top foods and meals (local mode, empty query) */}
         {showLocalFoods && isSearchEmpty && (
           <>
-            {isFetchingRecent && (
+            {(isFetchingRecent || isLoadingRecentMeals) && (
               <div className="text-center py-8 text-gray-500">
                 <Loader2 className="w-8 h-8 animate-spin mx-auto mb-2" />
                 {t('enhancedFoodSearch.searchingFoods', 'Searching foods...')}
               </div>
             )}
-            {!isFetchingRecent && (
+            {!isFetchingRecent && !isLoadingRecentMeals && (
               <>
+                {recentMeals.map((meal) => (
+                  <FoodResultCard
+                    key={`meal-${meal.id}`}
+                    item={meal}
+                    isMeal={true}
+                    nutrientConfig={nutrientConfig}
+                    onCardClick={() => onFoodSelect(meal, 'meal')}
+                  />
+                ))}
                 {recentFoods.map((food: Food) => (
                   <FoodResultCard
                     key={food.id}
                     item={food}
                     nutrientConfig={nutrientConfig}
                     onCardClick={() => onFoodSelect(food, 'food')}
+                  />
+                ))}
+                {topMealsToShow.map((meal) => (
+                  <FoodResultCard
+                    key={`meal-${meal.id}`}
+                    item={meal}
+                    isMeal={true}
+                    nutrientConfig={nutrientConfig}
+                    onCardClick={() => onFoodSelect(meal, 'meal')}
                   />
                 ))}
                 {topFoods.map((food: Food) => (
@@ -1016,14 +1051,22 @@ const EnhancedFoodSearch = ({
                     onCardClick={() => onFoodSelect(food, 'food')}
                   />
                 ))}
-                {recentFoods.length === 0 && topFoods.length === 0 && (
-                  <div className="text-center py-8 text-gray-500">
-                    {t(
-                      'enhancedFoodSearch.noRecentOrTopFoods',
-                      'No recent or top foods found. Start logging foods to see them here.'
-                    )}
-                  </div>
-                )}
+                {recentFoods.length === 0 &&
+                  topFoods.length === 0 &&
+                  recentMeals.length === 0 &&
+                  topMealsToShow.length === 0 && (
+                    <div className="text-center py-8 text-gray-500">
+                      {showMeals
+                        ? t(
+                            'enhancedFoodSearch.noRecentOrTopItems',
+                            'No recent or frequent foods or meals found. Start logging to see them here.'
+                          )
+                        : t(
+                            'enhancedFoodSearch.noRecentOrTopFoods',
+                            'No recent or top foods found. Start logging foods to see them here.'
+                          )}
+                    </div>
+                  )}
               </>
             )}
           </>
