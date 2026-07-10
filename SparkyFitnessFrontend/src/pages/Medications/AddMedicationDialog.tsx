@@ -1,7 +1,10 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Plus, Star, Pill } from 'lucide-react';
-import { GLP1_DRUG_PROFILES } from '@workspace/shared';
+import {
+  FOOD_VARIANT_NUTRIENT_FIELDS,
+  GLP1_DRUG_PROFILES,
+} from '@workspace/shared';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -26,8 +29,14 @@ import {
   useCreateMedicationMutation,
   useUpdateMedicationMutation,
 } from '@/hooks/useMedications';
-import type { Medication } from '@/types/medications';
+import type { Medication, MedicationNutrients } from '@/types/medications';
+import type { GlycemicIndex } from '@/types/food';
+import { useCustomNutrients } from '@/hooks/Foods/useCustomNutrients';
+import { usePreferences } from '@/contexts/PreferencesContext';
+import { NutrientGrid } from '@/components/FoodSearch/NutrientFormGrid';
+import { createDefaultFormVariant } from '@/utils/foodForm';
 import { MED_TYPES, MED_TYPE_ICONS, MED_TYPE_COLORS } from './medicationUtils';
+import { NutrientPicker } from './NutrientPicker';
 
 export function MedTypeIcon({
   typeId,
@@ -47,16 +56,55 @@ export function MedTypeIcon({
 export default function AddMedicationDialog({
   editMed,
   trigger,
+  defaultIsSupplement = false,
+  open: openProp,
+  onOpenChange,
 }: {
   editMed?: Medication;
   trigger?: ReactNode;
+  /** Opens with the supplement toggle already on — used by the "Add supplement" entry point. */
+  defaultIsSupplement?: boolean;
+  /** Controlled open state. When supplied the dialog renders no trigger of its own. */
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
 } = {}) {
   const { t } = useTranslation();
+  const { energyUnit, convertEnergy } = usePreferences();
+  const { data: customNutrients } = useCustomNutrients();
   const isEdit = Boolean(editMed);
-  const [open, setOpen] = useState(false);
+  const isControlled = openProp !== undefined;
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = isControlled ? openProp : internalOpen;
+  const setOpen = (next: boolean) => {
+    if (!isControlled) setInternalOpen(next);
+    onOpenChange?.(next);
+  };
   const [name, setName] = useState(editMed?.name ?? '');
   const [typeId, setTypeId] = useState(editMed?.type_id ?? 'pill');
   const [isGlp1, setIsGlp1] = useState(editMed?.is_glp1 ?? false);
+  const [isSupplement, setIsSupplement] = useState(
+    editMed?.is_supplement ?? defaultIsSupplement
+  );
+  // The nutrient rows the editor shows. Additive and user-chosen: a new supplement
+  // starts with none, and an existing one shows exactly what was saved against it.
+  const [selectedNutrients, setSelectedNutrients] = useState<string[]>(() => {
+    const saved = editMed?.nutrients;
+    if (!saved) return [];
+    return [
+      ...FOOD_VARIANT_NUTRIENT_FIELDS.filter(
+        (field) => typeof saved[field] === 'number'
+      ),
+      ...Object.keys(saved.custom_nutrients ?? {}),
+    ];
+  });
+  const [nutrientVariant, setNutrientVariant] = useState(() =>
+    createDefaultFormVariant(undefined, {
+      serving_size: 1,
+      serving_unit: 'dose',
+      ...editMed?.nutrients,
+      custom_nutrients: editMed?.nutrients?.custom_nutrients ?? {},
+    })
+  );
   const [glp1Drug, setGlp1Drug] = useState(
     (editMed?.custom_fields?.['glp1_drug'] as string | undefined) ??
       'semaglutide'
@@ -104,15 +152,87 @@ export default function AddMedicationDialog({
   const updateMutation = useUpdateMedicationMutation();
   const mutation = isEdit ? updateMutation : createMutation;
 
+  // Deduped as a set: two catalog picks can resolve onto the SAME existing custom
+  // nutrient (when its aliases cover both), so the incoming keys are not guaranteed
+  // unique among themselves, and a duplicate row would collide on its React key.
+  const addNutrients = (keys: string[]) => {
+    setSelectedNutrients((current) => [...new Set([...current, ...keys])]);
+  };
+
+  const removeNutrient = (key: string) => {
+    setSelectedNutrients((current) => current.filter((item) => item !== key));
+  };
+
+  const updateNutrient = (
+    _index: number,
+    field: string,
+    value: undefined | number | boolean | GlycemicIndex
+  ) => {
+    // Decided against the loaded custom-nutrient list: the standard fields are a fixed,
+    // known set, so anything outside it is a custom nutrient by definition. That keeps
+    // the routing independent of whether the custom-nutrient query has resolved yet.
+    const isCustomNutrient = !(
+      FOOD_VARIANT_NUTRIENT_FIELDS as readonly string[]
+    ).includes(field);
+    setNutrientVariant((current) => {
+      if (isCustomNutrient) {
+        return {
+          ...current,
+          custom_nutrients: {
+            ...current.custom_nutrients,
+            [field]: value === undefined ? '' : Number(value),
+          },
+        };
+      }
+      return {
+        ...current,
+        [field]:
+          value === undefined
+            ? undefined
+            : field === 'calories'
+              ? convertEnergy(Number(value), energyUnit, 'kcal')
+              : Number(value),
+      };
+    });
+  };
+
+  // Only the rows the user actually chose are saved. A value typed into a row that was
+  // then removed stays in form state (so re-adding the row restores it) but must not
+  // reach the payload.
+  const getNutrients = (): MedicationNutrients => {
+    const selected = new Set(selectedNutrients);
+    const nutrients: MedicationNutrients = {};
+    FOOD_VARIANT_NUTRIENT_FIELDS.forEach((field) => {
+      if (!selected.has(field)) return;
+      const value = nutrientVariant[field];
+      if (typeof value === 'number' && Number.isFinite(value))
+        nutrients[field] = value;
+    });
+    const custom = Object.fromEntries(
+      Object.entries(nutrientVariant.custom_nutrients ?? {}).flatMap(
+        ([name, value]) =>
+          selected.has(name) &&
+          typeof value === 'number' &&
+          Number.isFinite(value)
+            ? [[name, value] as const]
+            : []
+      )
+    );
+    if (Object.keys(custom).length > 0) nutrients.custom_nutrients = custom;
+    return nutrients;
+  };
+
   const handleSave = () => {
     const body: Partial<Medication> & { name: string } = {
       name: name.trim(),
       type_id: typeId,
       is_glp1: isGlp1,
+      is_supplement: isSupplement,
+      nutrients: isSupplement ? getNutrients() : {},
       strength_value: strength ? Number(strength) : null,
       strength_unit: strengthUnit || null,
-      dose_amount: strength ? Number(strength) : null,
-      dose_unit: strengthUnit || null,
+      dose_amount: isSupplement ? 1 : strength ? Number(strength) : null,
+      dose_unit: isSupplement ? 'dose' : strengthUnit || null,
       prescriber: prescriber.trim() || null,
       pharmacy: pharmacy.trim() || null,
       rx_number: rxNumber.trim() || null,
@@ -153,20 +273,30 @@ export default function AddMedicationDialog({
         setNotes('');
         setEffectiveness(0);
         setPhotoPath('');
+        setIsSupplement(defaultIsSupplement);
+        setSelectedNutrients([]);
+        setNutrientVariant(
+          createDefaultFormVariant(undefined, {
+            serving_size: 1,
+            serving_unit: 'dose',
+          })
+        );
       },
     });
   };
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
-      <DialogTrigger asChild>
-        {trigger ?? (
-          <Button>
-            <Plus className="mr-2 h-4 w-4" />{' '}
-            {t('medications.cabinet.addMed', 'Add medication')}
-          </Button>
-        )}
-      </DialogTrigger>
+      {!isControlled && (
+        <DialogTrigger asChild>
+          {trigger ?? (
+            <Button>
+              <Plus className="mr-2 h-4 w-4" />{' '}
+              {t('medications.cabinet.addMed', 'Add medication')}
+            </Button>
+          )}
+        </DialogTrigger>
+      )}
       <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>
@@ -356,6 +486,55 @@ export default function AddMedicationDialog({
                   </div>
                 </div>
               )}
+            </div>
+          )}
+          <div className="flex items-center justify-between rounded-md border p-3">
+            <div>
+              <Label className="text-sm font-medium">
+                {t('medications.cabinet.supplement', 'Supplement / Vitamin')}
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                {t(
+                  'medications.cabinet.supplementHint',
+                  'Adds nutrients from each taken dose to nutrition reports.'
+                )}
+              </p>
+            </div>
+            <Switch checked={isSupplement} onCheckedChange={setIsSupplement} />
+          </div>
+          {isSupplement && (
+            <div className="space-y-3 rounded-md border p-3 bg-muted/20">
+              <div>
+                <Label className="text-sm font-medium">
+                  {t(
+                    'medications.cabinet.nutritionPerDose',
+                    'Nutrition per dose'
+                  )}
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  {t(
+                    'medications.cabinet.nutritionPerDoseHint',
+                    'Add the nutrients on the label, then enter the amount supplied by one dose.'
+                  )}
+                </p>
+              </div>
+              {selectedNutrients.length > 0 && (
+                <NutrientGrid
+                  variantIndex={0}
+                  variant={nutrientVariant}
+                  visibleNutrients={selectedNutrients}
+                  energyUnit={energyUnit}
+                  convertEnergy={convertEnergy}
+                  customNutrients={customNutrients}
+                  onUpdate={updateNutrient}
+                  onRemove={removeNutrient}
+                />
+              )}
+              <NutrientPicker
+                selected={selectedNutrients}
+                customNutrients={customNutrients}
+                onAdd={addNutrients}
+              />
             </div>
           )}
           <div className="space-y-2">

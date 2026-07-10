@@ -4,6 +4,31 @@ import { optionalNullableNumber, optionalNullableInt } from './schema.utils.js';
 const customFields = z.record(z.string(), z.unknown()).nullable().optional();
 const optionalNullableString = z.string().nullable().optional();
 const optionalDateString = z.string().nullable().optional(); // 'YYYY-MM-DD'
+const nutrientValue = z.number().finite().nonnegative();
+
+export const MedicationNutrientsSchema = z
+  .object({
+    calories: nutrientValue.optional(),
+    protein: nutrientValue.optional(),
+    carbs: nutrientValue.optional(),
+    fat: nutrientValue.optional(),
+    saturated_fat: nutrientValue.optional(),
+    polyunsaturated_fat: nutrientValue.optional(),
+    monounsaturated_fat: nutrientValue.optional(),
+    trans_fat: nutrientValue.optional(),
+    cholesterol: nutrientValue.optional(),
+    sodium: nutrientValue.optional(),
+    potassium: nutrientValue.optional(),
+    dietary_fiber: nutrientValue.optional(),
+    sugars: nutrientValue.optional(),
+    vitamin_a: nutrientValue.optional(),
+    vitamin_c: nutrientValue.optional(),
+    calcium: nutrientValue.optional(),
+    iron: nutrientValue.optional(),
+    custom_nutrients: z.record(z.string(), nutrientValue).optional(),
+  })
+  .strict();
+export type MedicationNutrients = z.infer<typeof MedicationNutrientsSchema>;
 
 // --------------------------------------------------------------------------
 // Medications
@@ -30,6 +55,8 @@ const MedicationFieldsSchema = z.object({
   is_active: z.boolean().optional(),
   is_quick: z.boolean().optional(),
   is_glp1: z.boolean().optional(),
+  is_supplement: z.boolean().optional(),
+  nutrients: MedicationNutrientsSchema.optional(),
   notes: optionalNullableString,
   source: z.string().optional(),
   custom_fields: customFields,

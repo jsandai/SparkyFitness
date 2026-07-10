@@ -2,12 +2,22 @@ import { getClient } from '../db/poolManager.js';
 import { log } from '../config/logging.js';
 import { v4 as uuidv4 } from 'uuid';
 import { loadUserTimezone } from '../utils/timezoneLoader.js';
-import { todayInZone } from '@workspace/shared';
+import {
+  todayInZone,
+  getMicronutrientById,
+  normalizeNutrientName,
+} from '@workspace/shared';
 
 interface CreateCustomNutrientPayload {
   name: string;
   unit: string;
   aliases?: string[];
+  /**
+   * Seeds the nutrient's daily target on the user's goals/presets. Catalog-seeded
+   * nutrients pass their FDA Daily Value so %DV is meaningful immediately; a
+   * free-text nutrient has no published target and defaults to 0.
+   */
+  defaultTarget?: number | null;
 }
 
 interface UpdateCustomNutrientPayload {
@@ -44,7 +54,7 @@ class CustomNutrientService {
 
   static async createCustomNutrient(
     userId: string,
-    { name, unit, aliases }: CreateCustomNutrientPayload
+    { name, unit, aliases, defaultTarget }: CreateCustomNutrientPayload
   ) {
     const client = await getClient(userId);
     try {
@@ -66,21 +76,26 @@ class CustomNutrientService {
           userId,
           name
         );
-        // Also add to goal_presets and future user_goals with 0 value
-        // This ensures they show up in the goal editing and progress tracking
+        // Also add to goal_presets and future user_goals so they show up in goal
+        // editing and progress tracking. Catalog-seeded nutrients start at their
+        // Daily Value; free-text ones start at 0 for the user to fill in.
+        const target =
+          typeof defaultTarget === 'number' && Number.isFinite(defaultTarget)
+            ? defaultTarget
+            : 0;
         await client.query(
-          `UPDATE goal_presets 
-           SET custom_nutrients = jsonb_set(custom_nutrients, ARRAY[$1], '0'::jsonb) 
-           WHERE user_id = $2`,
-          [name, userId]
+          `UPDATE goal_presets
+           SET custom_nutrients = jsonb_set(custom_nutrients, ARRAY[$1], to_jsonb($2::numeric))
+           WHERE user_id = $3`,
+          [name, target, userId]
         );
         const tz = await loadUserTimezone(userId);
         const today = todayInZone(tz);
         await client.query(
           `UPDATE user_goals
-           SET custom_nutrients = jsonb_set(custom_nutrients, ARRAY[$1], '0'::jsonb)
-           WHERE user_id = $2 AND (goal_date >= $3 OR goal_date IS NULL)`,
-          [name, userId, today]
+           SET custom_nutrients = jsonb_set(custom_nutrients, ARRAY[$1], to_jsonb($2::numeric))
+           WHERE user_id = $3 AND (goal_date >= $4 OR goal_date IS NULL)`,
+          [name, target, userId, today]
         );
       } catch (autoAddError) {
         log(
@@ -115,6 +130,102 @@ class CustomNutrientService {
     } finally {
       client.release();
     }
+  }
+  /**
+   * Find-or-create the user's custom nutrients for a set of canonical catalog ids.
+   *
+   * Used by the supplement nutrient picker: picking "Vitamin D" must materialize a
+   * `user_custom_nutrients` row with the catalog's canonical name, unit, aliases and
+   * Daily Value, so that (a) %DV works immediately and (b) the provider-import
+   * matcher can later map label/provider spellings onto it.
+   *
+   * Idempotent. A catalog entry is skipped when:
+   *  - it is already a first-class `food_variants` column (`fixedField`) — creating a
+   *    custom "Vitamin C" alongside the built-in one would double-count it; or
+   *  - the user already has a nutrient whose name OR alias matches it (normalized),
+   *    so we never create a second "Magnesium".
+   *
+   * @returns `resolved` (each catalog id mapped to the nutrient key the caller should
+   *   store — a fixed field name, or the custom nutrient's actual name, which may be a
+   *   pre-existing spelling such as "Vit D"), plus what was created and the full list.
+   */
+  static async ensureCatalogNutrients(userId: string, catalogIds: string[]) {
+    const existing = await this.getCustomNutrients(userId);
+    // Normalized index of everything the user already has, by name AND alias, mapped
+    // back to that nutrient's actual name — so a catalog pick collapses onto the
+    // existing row (and reports its real name) instead of duplicating it. First match
+    // wins on alias collisions, matching the provider-import matcher's behaviour.
+    const claimed = new Map<string, string>();
+    for (const row of existing) {
+      claimed.set(normalizeNutrientName(row.name), row.name);
+      if (Array.isArray(row.aliases)) {
+        for (const alias of row.aliases) {
+          if (typeof alias !== 'string') continue;
+          const key = normalizeNutrientName(alias);
+          if (!claimed.has(key)) claimed.set(key, row.name);
+        }
+      }
+    }
+
+    const created = [];
+    const resolved: {
+      catalogId: string;
+      name: string;
+      fixedField?: string;
+    }[] = [];
+
+    for (const catalogId of catalogIds) {
+      const entry = getMicronutrientById(catalogId);
+      if (!entry) {
+        log(
+          'warn',
+          `Unknown micronutrient catalog id "${catalogId}" requested`,
+          { userId }
+        );
+        continue;
+      }
+      // Already a first-class nutrient column — the caller stores it there, and we
+      // must not shadow it with a custom nutrient of the same name.
+      if (entry.fixedField) {
+        resolved.push({
+          catalogId,
+          name: entry.displayName,
+          fixedField: entry.fixedField,
+        });
+        continue;
+      }
+
+      const keys = [entry.displayName, ...entry.aliases].map(
+        normalizeNutrientName
+      );
+      const existingName = keys
+        .map((key) => claimed.get(key))
+        .find((name) => name !== undefined);
+      if (existingName !== undefined) {
+        resolved.push({ catalogId, name: existingName });
+        continue;
+      }
+
+      const row = await this.createCustomNutrient(userId, {
+        name: entry.displayName,
+        unit: entry.unit,
+        aliases: entry.aliases,
+        defaultTarget: entry.rdi,
+      });
+      created.push(row);
+      for (const key of keys) {
+        if (!claimed.has(key)) claimed.set(key, entry.displayName);
+      }
+      resolved.push({ catalogId, name: entry.displayName });
+    }
+
+    // createCustomNutrient returns the full inserted row, so the post-seed list is just
+    // the old rows plus the new ones — no need to re-SELECT.
+    return {
+      created,
+      resolved,
+      nutrients: created.length > 0 ? [...existing, ...created] : existing,
+    };
   }
   /**
    * Retrieves a specific custom nutrient by its ID for a given user.

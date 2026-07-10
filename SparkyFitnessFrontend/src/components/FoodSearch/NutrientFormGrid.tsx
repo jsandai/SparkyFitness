@@ -1,3 +1,4 @@
+import { X } from 'lucide-react';
 import { Label } from '@/components/ui/label';
 import {
   Select,
@@ -38,6 +39,11 @@ interface NutrientGridProps {
     field: string,
     value: undefined | number | boolean | GlycemicIndex
   ) => void;
+  /**
+   * When supplied, each field gets a remove control. Used where the visible fields are
+   * chosen by the user (the supplement nutrient picker) rather than fixed by the form.
+   */
+  onRemove?: (field: string) => void;
 }
 
 function gridId(variantIndex: number, key: string) {
@@ -82,6 +88,7 @@ export function NutrientGrid({
   convertEnergy,
   customNutrients,
   onUpdate,
+  onRemove,
 }: NutrientGridProps) {
   const { t } = useTranslation();
   // Auto-Scale (is_locked) controls whether changing the serving size rescales
@@ -91,88 +98,107 @@ export function NutrientGrid({
   const update = (field: string) => (val: number | undefined) =>
     onUpdate(variantIndex, field, val);
 
+  const renderField = (key: string) => {
+    // --- Glycemic Index ---
+    if (key === 'glycemic_index') {
+      return (
+        <div>
+          <Label htmlFor={gridId(variantIndex, 'glycemic_index')}>
+            Glycemic Index (GI)
+          </Label>
+          <Select
+            value={variant.glycemic_index ?? 'None'}
+            onValueChange={(val: GlycemicIndex) =>
+              onUpdate(variantIndex, 'glycemic_index', val)
+            }
+          >
+            <SelectTrigger id={gridId(variantIndex, 'glycemic_index')}>
+              <SelectValue placeholder="Select GI" />
+            </SelectTrigger>
+            <SelectContent>
+              {GLYCEMIC_INDEX_OPTIONS.map(({ value, label }) => (
+                <SelectItem key={value} value={value}>
+                  {label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      );
+    }
+
+    // --- Calories ---
+    if (key === 'calories') {
+      return (
+        <NutrientInput
+          id={gridId(variantIndex, 'calories')}
+          label={`Calories (${energyUnit})`}
+          value={
+            variant.calories !== undefined
+              ? Math.round(
+                  convertEnergy(variant.calories || 0, 'kcal', energyUnit)
+                )
+              : undefined
+          }
+          step="1"
+          decimals={0}
+          onChange={update('calories')}
+        />
+      );
+    }
+
+    // --- Standard Nutrients ---
+    const cfg = CENTRAL_NUTRIENT_CONFIG[key];
+    if (cfg) {
+      return (
+        <NutrientInput
+          id={gridId(variantIndex, key)}
+          label={`${t(cfg.label, { defaultValue: cfg.defaultLabel })} (${cfg.unit})`}
+          value={variant[key as NumericFoodVariantKeys]}
+          step={cfg.decimals === 0 ? '1' : '0.1'}
+          decimals={cfg.decimals}
+          onChange={update(key)}
+        />
+      );
+    }
+
+    // --- Custom Nutrients ---
+    const cn = customNutrients?.find((n) => n.name === key);
+    if (!cn) return null;
+    const value = variant.custom_nutrients?.[cn.name];
+
+    return (
+      <NutrientInput
+        id={gridId(variantIndex, key)}
+        label={`${cn.name} (${cn.unit})`}
+        value={typeof value === 'number' ? value : undefined}
+        decimals={1}
+        onChange={update(cn.name)}
+      />
+    );
+  };
+
   return (
     <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
       {visibleNutrients.map((key) => {
-        // --- Glycemic Index ---
-        if (key === 'glycemic_index') {
-          return (
-            <div key="glycemic_index">
-              <Label htmlFor={gridId(variantIndex, 'glycemic_index')}>
-                Glycemic Index (GI)
-              </Label>
-              <Select
-                value={variant.glycemic_index ?? 'None'}
-                onValueChange={(val: GlycemicIndex) =>
-                  onUpdate(variantIndex, 'glycemic_index', val)
-                }
-              >
-                <SelectTrigger id={gridId(variantIndex, 'glycemic_index')}>
-                  <SelectValue placeholder="Select GI" />
-                </SelectTrigger>
-                <SelectContent>
-                  {GLYCEMIC_INDEX_OPTIONS.map(({ value, label }) => (
-                    <SelectItem key={value} value={value}>
-                      {label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          );
-        }
-
-        // --- Calories ---
-        if (key === 'calories') {
-          return (
-            <NutrientInput
-              key="calories"
-              id={gridId(variantIndex, 'calories')}
-              label={`Calories (${energyUnit})`}
-              value={
-                variant.calories !== undefined
-                  ? Math.round(
-                      convertEnergy(variant.calories || 0, 'kcal', energyUnit)
-                    )
-                  : undefined
-              }
-              step="1"
-              decimals={0}
-              onChange={update('calories')}
-            />
-          );
-        }
-
-        // --- Standard Nutrients ---
-        const cfg = CENTRAL_NUTRIENT_CONFIG[key];
-        if (cfg) {
-          return (
-            <NutrientInput
-              key={key}
-              id={gridId(variantIndex, key)}
-              label={`${t(cfg.label, { defaultValue: cfg.defaultLabel })} (${cfg.unit})`}
-              value={variant[key as NumericFoodVariantKeys]}
-              step={cfg.decimals === 0 ? '1' : '0.1'}
-              decimals={cfg.decimals}
-              onChange={update(key)}
-            />
-          );
-        }
-
-        // --- Custom Nutrients ---
-        const cn = customNutrients?.find((n) => n.name === key);
-        if (!cn) return null;
-        const value = variant.custom_nutrients?.[cn.name];
-
+        const field = renderField(key);
+        if (!field) return null;
+        if (!onRemove) return <div key={key}>{field}</div>;
         return (
-          <NutrientInput
-            key={key}
-            id={gridId(variantIndex, key)}
-            label={`${cn.name} (${cn.unit})`}
-            value={typeof value === 'number' ? value : undefined}
-            decimals={1}
-            onChange={update(cn.name)}
-          />
+          <div key={key} className="group relative">
+            {field}
+            <button
+              type="button"
+              onClick={() => onRemove(key)}
+              aria-label={t('foods.removeNutrient', {
+                defaultValue: 'Remove {{nutrient}}',
+                nutrient: key,
+              })}
+              className="absolute right-0 top-0 text-muted-foreground opacity-0 transition-opacity hover:text-destructive focus-visible:opacity-100 group-hover:opacity-100"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
         );
       })}
     </div>

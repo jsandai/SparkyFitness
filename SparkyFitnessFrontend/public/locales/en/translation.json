@@ -32,7 +32,8 @@
     "nameRequired": "The 'name' field cannot be empty."
   },
   "foods": {
-    "providerVerified": "Verified food"
+    "providerVerified": "Verified food",
+    "removeNutrient": "Remove {{nutrient}}"
   },
   "medications": {
     "tabs": {
@@ -233,6 +234,29 @@
       "glp1Med": "GLP-1 medication",
       "glp1Hint": "Unlocks the injection coach, PK curve & site rotation.",
       "glp1Drug": "GLP-1 drug (for the PK model)",
+      "supplement": "Supplement / Vitamin",
+      "supplementHint": "Adds nutrients from each taken dose to nutrition reports.",
+      "addSupplement": "Add supplement",
+      "moreAddOptions": "More add options",
+      "nutritionPerDose": "Nutrition per dose",
+      "nutritionPerDoseHint": "Add the nutrients on the label, then enter the amount supplied by one dose.",
+      "addNutrient": "Add nutrient",
+      "searchNutrients": "Search nutrients…",
+      "noNutrientMatches": "No matches. Create it below.",
+      "nutrientGroupCatalog": "Vitamins & minerals",
+      "nutrientGroupMacro": "Macronutrients",
+      "nutrientGroupCustom": "Your custom nutrients",
+      "createNutrient": "Not listed? Create your own",
+      "nutrientNamePlaceholder": "e.g. Ashwagandha",
+      "nutrientUnit": "Unit",
+      "nutrientExists": "That nutrient already exists — pick it from the list.",
+      "createAndAdd": "Create & add",
+      "addSelected": "Add selected",
+      "addSelectedCount_one": "Add {{count}} nutrient",
+      "addSelectedCount_other": "Add {{count}} nutrients",
+      "multivitaminPanel": "Multivitamin panel",
+      "nutrientCount_one": "{{count}} nutrient",
+      "nutrientCount_other": "{{count}} nutrients",
       "reason": "Reason / condition (optional)",
       "reasonPlaceholder": "e.g. Weight management, Type 2 diabetes",
       "prescriber": "Prescriber (optional)",
@@ -1854,6 +1878,8 @@
     "signInMessage": "Please sign in to view reports.",
     "loadingDateControls": "Loading date controls...",
     "loadingReports": "Loading reports...",
+    "fromFood": "Food",
+    "fromSupplements": "Supplements",
     "chartsTab": "Charts",
     "exerciseProgressTab": "Exercise Progress",
     "sleepTab": "Sleep",

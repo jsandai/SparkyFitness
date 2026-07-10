@@ -113,6 +113,97 @@ router.post('/', async (req, res, next) => {
 });
 /**
  * @swagger
+ * /custom-nutrients/from-catalog:
+ *   post:
+ *     summary: Find-or-create custom nutrients from the canonical micronutrient catalog
+ *     tags: [Nutrition & Meals]
+ *     description: >
+ *       Ensures the authenticated user has a custom nutrient for each supplied canonical
+ *       catalog id, seeded with the catalog's name, unit, aliases and Daily Value.
+ *       Idempotent: ids the user already has (matched by name or alias) are skipped, as are
+ *       catalog entries that are already first-class nutrient columns.
+ *     security:
+ *       - cookieAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required:
+ *               - catalogIds
+ *             properties:
+ *               catalogIds:
+ *                 type: array
+ *                 items:
+ *                   type: string
+ *                 description: Canonical micronutrient catalog ids (e.g. "vitamin_d", "magnesium").
+ *     responses:
+ *       200:
+ *         description: The user's custom nutrients after seeding.
+ *         content:
+ *           application/json:
+ *             schema:
+ *               type: object
+ *               properties:
+ *                 resolved:
+ *                   type: array
+ *                   description: Each requested catalog id mapped to the nutrient key to store against.
+ *                   items:
+ *                     type: object
+ *                     properties:
+ *                       catalogId:
+ *                         type: string
+ *                       name:
+ *                         type: string
+ *                         description: The custom nutrient's actual name (may pre-date the catalog).
+ *                       fixedField:
+ *                         type: string
+ *                         description: Set when the nutrient is a built-in column rather than a custom nutrient.
+ *                 created:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/CustomNutrient'
+ *                 nutrients:
+ *                   type: array
+ *                   items:
+ *                     $ref: '#/components/schemas/CustomNutrient'
+ *       400:
+ *         description: catalogIds must be an array of strings.
+ *       401:
+ *         description: Unauthorized, authentication token is missing or invalid.
+ *       500:
+ *         description: Failed to seed custom nutrients.
+ */
+router.post('/from-catalog', async (req, res, next) => {
+  try {
+    const { catalogIds } = req.body;
+    if (
+      !Array.isArray(catalogIds) ||
+      catalogIds.some((id) => typeof id !== 'string')
+    ) {
+      res
+        .status(400)
+        .json({ message: 'catalogIds must be an array of strings.' });
+      return;
+    }
+    const result = await customNutrientService.ensureCatalogNutrients(
+      req.userId,
+      catalogIds
+    );
+    res.status(200).json(result);
+  } catch (error) {
+    // @ts-expect-error TS(2571): Object is of type 'unknown'.
+    log('error', `Error seeding catalog nutrients: ${error.message}`, {
+      userId: req.userId,
+      // @ts-expect-error TS(2571): Object is of type 'unknown'.
+      error: error.stack,
+    });
+    next(error);
+  }
+});
+/**
+ * @swagger
  * /custom-nutrients:
  *   get:
  *     summary: Retrieve all custom nutrients

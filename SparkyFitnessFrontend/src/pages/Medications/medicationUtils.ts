@@ -1,4 +1,6 @@
 import i18n from '@/i18n';
+import { FOOD_VARIANT_NUTRIENT_FIELDS } from '@workspace/shared';
+import type { MedicationNutrients } from '@/types/medications';
 import {
   Pill,
   Syringe,
@@ -200,4 +202,17 @@ export const formatScheduleDescription = (sched: MedicationSchedule) => {
     default:
       return `${sched.schedule_type_id}${timeStr}${mealStr}`;
   }
+};
+
+// How many nutrient rows a supplement's per-dose payload carries. Used for the compact
+// "12 nutrients" badge — a multivitamin has ~26, which is correct but not worth listing
+// inline on a card.
+export const countMedicationNutrients = (
+  nutrients: MedicationNutrients | null | undefined
+): number => {
+  if (!nutrients) return 0;
+  const fixed = FOOD_VARIANT_NUTRIENT_FIELDS.filter(
+    (field) => typeof nutrients[field] === 'number'
+  ).length;
+  return fixed + Object.keys(nutrients.custom_nutrients ?? {}).length;
 };

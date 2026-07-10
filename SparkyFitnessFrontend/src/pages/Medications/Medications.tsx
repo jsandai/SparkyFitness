@@ -34,6 +34,8 @@ import { usePreferences } from '@/contexts/PreferencesContext';
 import type { MedicationDetail, MedicationSchedule } from '@/types/medications';
 import Glp1Coach from './Glp1Coach';
 import AddMedicationDialog, { MedTypeIcon } from './AddMedicationDialog';
+import { AddMedicationSplitButton } from './AddMedicationSplitButton';
+import { countMedicationNutrients } from './medicationUtils';
 import ScheduleManager from './ScheduleManager';
 import TodayMedications from './TodayMedications';
 import SymptomDashboard from './SymptomDashboard';
@@ -227,7 +229,7 @@ export default function Medications() {
           <span className="mx-2 text-muted-foreground/30 hidden sm:inline">
             |
           </span>
-          <AddMedicationDialog />
+          <AddMedicationSplitButton />
         </div>
 
         {/* Vertical Divider (Desktop Only) */}
@@ -402,6 +404,22 @@ export default function Medications() {
                               GLP-1
                             </Badge>
                           )}
+                          {selected.is_supplement &&
+                            countMedicationNutrients(selected.nutrients) >
+                              0 && (
+                              <Badge
+                                variant="secondary"
+                                className="text-[10px] px-1.5 py-0"
+                              >
+                                {t('medications.cabinet.nutrientCount', {
+                                  defaultValue: '{{count}} nutrient',
+                                  defaultValue_other: '{{count}} nutrients',
+                                  count: countMedicationNutrients(
+                                    selected.nutrients
+                                  ),
+                                })}
+                              </Badge>
+                            )}
                         </div>
                         <CardDescription className="text-xs mt-0.5">
                           {selected.strength_value
