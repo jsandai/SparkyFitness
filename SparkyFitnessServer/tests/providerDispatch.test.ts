@@ -347,6 +347,25 @@ describe('dispatchAiRequest — preconditions', () => {
     expect(imagePart.source.media_type).toBe('image/jpeg');
   });
 
+  it('does not crash when an image mime type is missing (non-string)', async () => {
+    mockFetch(anthropicToolBody(SAMPLE));
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'anthropic',
+          api_key: 'anth-key',
+        }),
+        // Untyped external JSON (api-fitness/MCP) can omit mimeType; the
+        // normalizer must tolerate it instead of throwing on .trim().
+        images: [
+          { base64: 'aGVsbG8=', mimeType: undefined as unknown as string },
+        ],
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(convertMock).not.toHaveBeenCalled();
+  });
+
   it('falls back to unsupported_media when HEIC transcoding fails', async () => {
     convertMock.mockRejectedValueOnce(new Error('not a valid HEIC file'));
     const m = vi.fn();

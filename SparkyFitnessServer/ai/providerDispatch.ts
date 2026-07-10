@@ -179,7 +179,11 @@ export function requiresApiKey(serviceType: string): boolean {
 // that rejects it opaquely. Also map the non-standard 'image/jpg' to the
 // canonical 'image/jpeg', which Anthropic's Messages API requires. This is the
 // single normalization point for every provider builder, so it lives here.
-function normalizeMimeType(mimeType: string): string {
+// dispatch is reached via untyped external JSON (api-fitness, MCP), so guard
+// against a non-string mimeType rather than trusting the static type — a bare
+// .trim() on null/undefined would crash the request.
+function normalizeMimeType(mimeType: string | undefined | null): string {
+  if (typeof mimeType !== 'string') return '';
   const normalized = mimeType.trim().toLowerCase();
   return normalized === 'image/jpg' ? 'image/jpeg' : normalized;
 }
