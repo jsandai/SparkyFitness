@@ -207,14 +207,24 @@ async function transcodeHeicImages(
   return Promise.all(
     images.map(async (img) => {
       if (!HEIC_MIME_TYPES.has(img.mimeType)) return img;
+      const input = Buffer.from(img.base64, 'base64');
+      const startedAt = Date.now();
       try {
         const output = await convert({
-          buffer: Buffer.from(img.base64, 'base64'),
+          buffer: input,
           format: 'JPEG',
           quality: HEIC_JPEG_QUALITY,
         });
+        const jpeg = Buffer.from(output);
+        // Log the decode cost: this WASM transcode runs on the main thread, so
+        // the timing here is the signal to watch if offloading to a worker pool
+        // is ever warranted under concurrent load.
+        log(
+          'info',
+          `providerDispatch: HEIC->JPEG transcode ok in ${Date.now() - startedAt}ms (${input.length}B HEIC -> ${jpeg.length}B JPEG)`
+        );
         return {
-          base64: Buffer.from(output).toString('base64'),
+          base64: jpeg.toString('base64'),
           mimeType: 'image/jpeg',
         };
       } catch (error) {
