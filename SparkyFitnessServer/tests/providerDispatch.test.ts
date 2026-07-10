@@ -324,6 +324,29 @@ describe('dispatchAiRequest — preconditions', () => {
     expect(imagePart.source.data).toBe(TRANSCODED_JPEG_B64);
   });
 
+  it('normalizes uppercase/whitespace HEIC mime types before the transcode check', async () => {
+    const m = mockFetch(anthropicToolBody(SAMPLE));
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'anthropic',
+          api_key: 'anth-key',
+        }),
+        images: [{ base64: 'aGVsbG8=', mimeType: '  IMAGE/HEIC  ' }],
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(convertMock).toHaveBeenCalledOnce();
+    const { body } = captured(m);
+    const content = (
+      body.messages as Array<{ content: Array<Record<string, unknown>> }>
+    )[0].content;
+    const imagePart = content.find((p) => p.type === 'image') as {
+      source: { media_type: string };
+    };
+    expect(imagePart.source.media_type).toBe('image/jpeg');
+  });
+
   it('falls back to unsupported_media when HEIC transcoding fails', async () => {
     convertMock.mockRejectedValueOnce(new Error('not a valid HEIC file'));
     const m = vi.fn();

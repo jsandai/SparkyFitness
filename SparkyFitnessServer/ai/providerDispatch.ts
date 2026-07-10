@@ -172,10 +172,16 @@ export function requiresApiKey(serviceType: string): boolean {
   );
 }
 
-// Anthropic's Messages API rejects the non-standard 'image/jpg'; normalize it
-// to the canonical 'image/jpeg'. Shared transport concern, so it lives here.
+// Canonicalize an image MIME type before it drives any downstream decision.
+// MIME types are case-insensitive and may carry stray whitespace (RFC 2045), so
+// lowercase and trim first — otherwise `image/HEIC` would slip past both the
+// HEIC transcode check and its unsupported_media fallback and reach a provider
+// that rejects it opaquely. Also map the non-standard 'image/jpg' to the
+// canonical 'image/jpeg', which Anthropic's Messages API requires. This is the
+// single normalization point for every provider builder, so it lives here.
 function normalizeMimeType(mimeType: string): string {
-  return mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+  const normalized = mimeType.trim().toLowerCase();
+  return normalized === 'image/jpg' ? 'image/jpeg' : normalized;
 }
 
 // JPEG re-encode quality for transcoded HEIC. High enough to be invisible to a
