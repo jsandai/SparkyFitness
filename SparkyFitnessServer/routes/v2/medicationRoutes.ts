@@ -66,7 +66,7 @@ router.use(checkPermissionMiddleware('medications'));
  *       required: true
  *       content:
  *         application/json:
- *           schema: { type: object, required: [name], properties: { name: { type: string }, is_glp1: { type: boolean }, type_id: { type: string }, strength_value: { type: number }, strength_unit: { type: string } } }
+ *           schema: { type: object, required: [name], properties: { name: { type: string }, is_glp1: { type: boolean }, is_supplement: { type: boolean }, nutrients: { type: object, description: Fixed-key and custom nutrient amounts per dose }, type_id: { type: string }, strength_value: { type: number }, strength_unit: { type: string } } }
  *     responses:
  *       201: { description: Created. }
  *       400: { description: Invalid request. }
