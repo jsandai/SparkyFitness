@@ -7,6 +7,17 @@ import {
   type ProviderConfig,
 } from '../ai/providerDispatch.js';
 import { OutboundUrlBlockedError } from '../utils/outboundUrlPolicy.js';
+import convert from 'heic-convert';
+
+// Fixed "JPEG" bytes returned by the mocked transcoder. Declared via vi.hoisted
+// so the hoisted vi.mock('heic-convert') factory below can reference it.
+const { TRANSCODED_JPEG_BYTES } = vi.hoisted(() => ({
+  TRANSCODED_JPEG_BYTES: new Uint8Array([0xff, 0xd8, 0xff, 0xe0]),
+}));
+const convertMock = vi.mocked(convert);
+const TRANSCODED_JPEG_B64 = Buffer.from(TRANSCODED_JPEG_BYTES).toString(
+  'base64'
+);
 
 // Mock the undici Agent so the Ollama path never constructs a real agent.
 // (global.fetch is mocked per-test; the dispatcher option is ignored by it.)
@@ -18,6 +29,13 @@ vi.mock('undici', () => {
   const buildConnector = vi.fn(() => vi.fn());
   return { default: { Agent, buildConnector }, Agent, buildConnector };
 });
+
+// Mock heic-convert so tests don't need real HEIC bytes. Default: succeed,
+// returning fixed "JPEG" bytes. Individual tests override with mockRejected* to
+// exercise the transcode-failure fallback.
+vi.mock('heic-convert', () => ({
+  default: vi.fn(async () => TRANSCODED_JPEG_BYTES),
+}));
 
 const SCHEMA: JsonSchemaNode = {
   type: 'object',
@@ -281,22 +299,49 @@ describe('dispatchAiRequest — preconditions', () => {
     }
   );
 
-  it('returns unsupported_media when HEIC is sent to a non-Gemini provider', async () => {
+  it('transcodes HEIC to JPEG for a non-Gemini provider and dispatches it', async () => {
+    const m = mockFetch(anthropicToolBody(SAMPLE));
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'anthropic',
+          api_key: 'anth-key',
+        }),
+        images: [{ base64: 'aGVsbG8=', mimeType: 'image/heic' }],
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(convertMock).toHaveBeenCalledOnce();
+    // The upstream request must carry the re-encoded JPEG, not the HEIC bytes.
+    const { body } = captured(m);
+    const content = (
+      body.messages as Array<{ content: Array<Record<string, unknown>> }>
+    )[0].content;
+    const imagePart = content.find((p) => p.type === 'image') as {
+      source: { media_type: string; data: string };
+    };
+    expect(imagePart.source.media_type).toBe('image/jpeg');
+    expect(imagePart.source.data).toBe(TRANSCODED_JPEG_B64);
+  });
+
+  it('falls back to unsupported_media when HEIC transcoding fails', async () => {
+    convertMock.mockRejectedValueOnce(new Error('not a valid HEIC file'));
     const m = vi.fn();
     global.fetch = m as typeof global.fetch;
     const result = await dispatchAiRequest(
       baseRequest({
         provider: makeProvider({ service_type: 'anthropic' }),
-        images: [{ base64: 'aGVsbG8=', mimeType: 'image/heic' }],
+        images: [{ base64: 'bm90LWhlaWM=', mimeType: 'image/heif' }],
       })
     );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.category).toBe('unsupported_media');
+    // Failed transcode must not ship bytes upstream.
     expect(m).not.toHaveBeenCalled();
   });
 
-  it('allows HEIC for google (Gemini accepts it)', async () => {
-    mockFetch(googleBody(JSON.stringify(SAMPLE)));
+  it('does not transcode HEIC for google (Gemini accepts it natively)', async () => {
+    const m = mockFetch(googleBody(JSON.stringify(SAMPLE)));
     const result = await dispatchAiRequest(
       baseRequest({
         provider: makeProvider({ service_type: 'google', api_key: 'gem-key' }),
@@ -304,6 +349,16 @@ describe('dispatchAiRequest — preconditions', () => {
       })
     );
     expect(result.ok).toBe(true);
+    expect(convertMock).not.toHaveBeenCalled();
+    // HEIC is forwarded to Gemini unchanged.
+    const { body } = captured(m);
+    const parts = (
+      body.contents as Array<{ parts: Array<Record<string, unknown>> }>
+    )[0].parts;
+    const imagePart = parts.find((p) => p.inline_data !== undefined) as {
+      inline_data: { mime_type: string };
+    };
+    expect(imagePart.inline_data.mime_type).toBe('image/heic');
   });
 });
 

@@ -1,4 +1,6 @@
 import undici from 'undici';
+import convert from 'heic-convert';
+import { log } from '../config/logging.js';
 import { getDefaultModel, getDefaultVisionModel } from './config.js';
 import {
   createGuardedDispatcher,
@@ -112,8 +114,10 @@ function parseRetryAfterMs(body: string): number | null {
 
 type ProviderFamily = 'google' | 'openai' | 'anthropic' | 'ollama';
 
-// Providers whose vision APIs reject HEIC/HEIF (only Gemini accepts them).
-// Surfaced as `unsupported_media` so it doesn't masquerade as an opaque 502.
+// iPhones default to HEIC/HEIF, which every vision provider except Gemini
+// rejects. We transcode these to JPEG server-side (see transcodeHeicImages) so
+// uploads "just work" regardless of provider or client; only if transcoding
+// fails do we surface `unsupported_media` rather than an opaque provider 502.
 const HEIC_MIME_TYPES = new Set(['image/heic', 'image/heif']);
 
 // OpenAI-family providers that reliably support strict `response_format.json_schema`.
@@ -172,6 +176,48 @@ export function requiresApiKey(serviceType: string): boolean {
 // to the canonical 'image/jpeg'. Shared transport concern, so it lives here.
 function normalizeMimeType(mimeType: string): string {
   return mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+}
+
+// JPEG re-encode quality for transcoded HEIC. High enough to be invisible to a
+// vision model, low enough to keep the base64 payload modest.
+const HEIC_JPEG_QUALITY = 0.9;
+
+/**
+ * Transcode any HEIC/HEIF images to JPEG in place, leaving other formats
+ * untouched. Uses `heic-convert` (libheif via WASM) so no native build or
+ * system library is required — it drops into the existing runtime image.
+ *
+ * A single image failing to decode returns unchanged (still HEIC); the caller
+ * detects the leftover HEIC mime type and fails loud with `unsupported_media`
+ * rather than shipping bytes the provider will reject opaquely.
+ */
+async function transcodeHeicImages(
+  images: DispatchImage[]
+): Promise<DispatchImage[]> {
+  return Promise.all(
+    images.map(async (img) => {
+      if (!HEIC_MIME_TYPES.has(img.mimeType)) return img;
+      try {
+        const output = await convert({
+          buffer: Buffer.from(img.base64, 'base64'),
+          format: 'JPEG',
+          quality: HEIC_JPEG_QUALITY,
+        });
+        return {
+          base64: Buffer.from(output).toString('base64'),
+          mimeType: 'image/jpeg',
+        };
+      } catch (error) {
+        log(
+          'warn',
+          `providerDispatch: HEIC->JPEG transcode failed, falling back to unsupported_media: ${
+            error instanceof Error ? error.message : String(error)
+          }`
+        );
+        return img;
+      }
+    })
+  );
 }
 
 function isBlank(value: string | undefined | null): boolean {
@@ -873,21 +919,28 @@ export async function dispatchAiRequest(
     }
   }
 
-  const images = (req.images ?? []).map((img) => ({
+  let images = (req.images ?? []).map((img) => ({
     base64: img.base64,
     mimeType: normalizeMimeType(img.mimeType),
   }));
   const hasImages = images.length > 0;
 
+  // Gemini accepts HEIC natively, so skip the transcode work there. Every other
+  // provider rejects it: convert to JPEG so the upload succeeds regardless of
+  // client (iPhones default to HEIC). If conversion fails, the image stays HEIC
+  // and we fail loud below rather than shipping bytes the provider will reject.
   if (
     serviceType !== 'google' &&
     images.some((img) => HEIC_MIME_TYPES.has(img.mimeType))
   ) {
-    return {
-      ok: false,
-      category: 'unsupported_media',
-      detail: `AI service type '${serviceType}' does not support HEIC/HEIF images. Use JPEG, PNG, or WebP.`,
-    };
+    images = await transcodeHeicImages(images);
+    if (images.some((img) => HEIC_MIME_TYPES.has(img.mimeType))) {
+      return {
+        ok: false,
+        category: 'unsupported_media',
+        detail: `AI service type '${serviceType}' does not support HEIC/HEIF images, and automatic conversion to JPEG failed. Use JPEG, PNG, or WebP.`,
+      };
+    }
   }
 
   const model =
