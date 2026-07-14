@@ -39,12 +39,39 @@ const VALID_ACTIONS = [
   'delete_exercise_entry',
   'get_exercise_details',
   'create_workout_preset',
+  'update_workout_preset',
+  'delete_workout_preset',
   'get_exercise_progress',
 ];
+
+// A caller mistake the handler can explain, as opposed to a DB failure it
+// can't. The switch's catch maps this to a VALIDATION error; everything else
+// stays a generic DB_ERROR so internals never leak.
+class ToolValidationError extends Error {}
 
 // Optional inputs and nullable DB columns are treated alike: absent.
 function isSet<T>(value: T | null | undefined): value is T {
   return value !== null && value !== undefined;
+}
+
+// The set `duration` column is MINUTES; this tool surface speaks SECONDS (see
+// durationSecondsSchema). Convert at the repository boundary, in one place, so
+// the unit can't drift back. The column is numeric, so fractions are safe: a
+// 30-second hold round-trips as 0.5 minutes.
+function secondsToMinutes(seconds: number | null | undefined): number | null {
+  return isSet(seconds) ? seconds / 60 : null;
+}
+
+function minutesToSeconds(minutes: number | null | undefined): number | null {
+  return isSet(minutes) ? Number(minutes) * 60 : null;
+}
+
+// The AI layer historically emitted 'Warmup'; the web UI's vocabulary spells it
+// 'Warm-up' and renders anything else as an unknown badge. Accept the old
+// spelling, store the one the UI knows.
+function normalizeSetType(setType: string | undefined): string {
+  if (!setType) return 'Working Set';
+  return setType === 'Warmup' ? 'Warm-up' : setType;
 }
 
 // Text columns may hold JSON arrays, comma-separated values, or plain strings.
@@ -71,7 +98,7 @@ function safeParseJson(value: unknown): string[] {
 interface ExerciseSetInput {
   reps?: number;
   weight?: number;
-  duration?: number;
+  duration_seconds?: number;
   rest_time?: number;
   set_type?: string;
   rpe?: number;
@@ -83,14 +110,248 @@ interface ExerciseSetInput {
 function toRepoSets(sets: ExerciseSetInput[]) {
   return sets.map((s, i) => ({
     set_number: i + 1,
-    set_type: s.set_type || 'Working Set',
+    set_type: normalizeSetType(s.set_type),
     reps: s.reps ?? null,
     weight: s.weight ?? null,
-    duration: s.duration ?? null,
+    duration: secondsToMinutes(s.duration_seconds),
     rest_time: s.rest_time ?? null,
     rpe: s.rpe ?? null,
     notes: s.notes ?? null,
   }));
+}
+
+// A set as it comes BACK from the DB: `duration` is the raw minutes column, not
+// the seconds this tool surface speaks. Kept distinct from ExerciseSetInput so
+// the two units can't be confused on the read path — rendering a minutes value
+// as `${s.duration}s` is exactly the bug this split prevents.
+interface ExerciseSetRow {
+  reps?: number;
+  weight?: number;
+  duration?: number;
+  rest_time?: number;
+  set_type?: string;
+  rpe?: number;
+  notes?: string;
+}
+
+interface PresetSetInput {
+  set_number?: number;
+  set_type?: string;
+  reps?: number;
+  weight?: number;
+  duration_seconds?: number;
+  rest_time?: number;
+  notes?: string;
+}
+
+interface PresetExerciseInput {
+  exercise_id?: string;
+  exercise_name?: string;
+  sort_order?: number;
+  superset_group?: number | null;
+  sets?: PresetSetInput[];
+}
+
+// Preset sets have no rpe column, and set_number is NOT NULL — so unlike
+// toRepoSets this numbers from array position rather than dropping the field.
+function toPresetSets(sets: PresetSetInput[]) {
+  return sets.map((s, i) => ({
+    set_number: s.set_number ?? i + 1,
+    set_type: normalizeSetType(s.set_type),
+    reps: s.reps ?? null,
+    weight: s.weight ?? null,
+    duration: secondsToMinutes(s.duration_seconds),
+    rest_time: s.rest_time ?? null,
+    notes: s.notes ?? null,
+  }));
+}
+
+// Models serialise nested arrays as JSON strings. Absent stays absent; a
+// malformed or non-array string is the caller's mistake, not a DB failure.
+function parseJsonArray<T>(
+  value: T[] | string | undefined,
+  field: string
+): T[] | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'string') return value;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new ToolValidationError(`Invalid JSON format for ${field}`);
+  }
+  if (!Array.isArray(parsed)) {
+    throw new ToolValidationError(`${field} must be an array`);
+  }
+  return parsed as T[];
+}
+
+// Resolution order for a free-text exercise name: exact case-insensitive match,
+// then the best fuzzy hit, then create it. Returns the row so callers can show
+// what the name actually bound to — a fuzzy hit or a brand-new exercise are
+// both things the user deserves to see, not silently accept.
+async function resolveExerciseByName(userId: string, name: string) {
+  const rows = await exerciseService.searchExercises(
+    userId,
+    name,
+    userId,
+    undefined,
+    undefined
+  );
+  const lower = name.toLowerCase();
+  const found =
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    rows.find((e: any) => String(e.name).toLowerCase() === lower) ?? rows[0];
+  if (found) {
+    return {
+      id: found.id as string,
+      name: found.name as string,
+      created: false,
+    };
+  }
+  const created = await exerciseService.createExercise(userId, {
+    name,
+    category: 'custom',
+    calories_per_hour: 300,
+    is_custom: true,
+    shared_with_public: false,
+    source: 'manual',
+  });
+  return {
+    id: created.id as string,
+    name: created.name as string,
+    created: true,
+  };
+}
+
+// Preset exercises as the service wants them: exercise_id resolved, sort_order
+// dense from array position (the repo's `sort_order || 0` would otherwise
+// collapse an unordered list into a tie), sets numbered and converted to
+// minutes.
+async function buildPresetExercises(
+  userId: string,
+  exercises: PresetExerciseInput[]
+) {
+  const createdNames: string[] = [];
+  const built = [];
+  for (const [i, ex] of exercises.entries()) {
+    if (!ex.exercise_id && !ex.exercise_name) {
+      throw new ToolValidationError(
+        `exercises[${i}]: either exercise_id or exercise_name must be provided`
+      );
+    }
+    let exerciseId = ex.exercise_id;
+    if (!exerciseId && ex.exercise_name) {
+      const resolved = await resolveExerciseByName(userId, ex.exercise_name);
+      exerciseId = resolved.id;
+      if (resolved.created) createdNames.push(resolved.name);
+    }
+    built.push({
+      exercise_id: exerciseId,
+      sort_order: ex.sort_order ?? i,
+      superset_group: ex.superset_group ?? null,
+      sets: ex.sets ? toPresetSets(ex.sets) : undefined,
+    });
+  }
+  return { exercises: built, createdNames };
+}
+
+// superset_group is an arbitrary integer; letters read better in chat and keep
+// the grouping obvious without exposing the raw key.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function supersetLabels(exercises: any[]): Map<number, string> {
+  const labels = new Map<number, string>();
+  for (const ex of exercises) {
+    const group = ex.superset_group;
+    if (!isSet(group) || labels.has(group)) continue;
+    labels.set(group, String.fromCharCode(65 + labels.size));
+  }
+  return labels;
+}
+
+// One set, in the idiom list_exercise_diary already uses: `8r×24kg (rest 90s)`.
+// duration comes back out of the DB in minutes and is rendered in seconds, the
+// unit this tool surface speaks.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function formatPresetSet(s: any): string {
+  const parts: string[] = [];
+  if (isSet(s.reps)) parts.push(`${s.reps}r`);
+  if (isSet(s.weight)) parts.push(`${s.weight}kg`);
+  if (isSet(s.duration)) parts.push(`${minutesToSeconds(s.duration)}s`);
+  let text = parts.join('×');
+  if (s.set_type && s.set_type !== 'Working Set') {
+    text = text ? `${text} [${s.set_type}]` : `[${s.set_type}]`;
+  }
+  if (isSet(s.rest_time)) text += ` (rest ${s.rest_time}s)`;
+  if (s.notes) text += ` (${s.notes})`;
+  return text;
+}
+
+// The full prescription, so the model can verify what it wrote and edit it.
+// The old formatter printed only the name and an exercise count, which made the
+// authoring loop impossible to close.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function formatPreset(p: any): string {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const exercises: any[] = p.exercises ?? [];
+  let text = `**${p.name}** (ID: ${p.id}) — ${exercises.length} exercises`;
+  if (p.description) text += `\n  *${p.description}*`;
+  const labels = supersetLabels(exercises);
+  exercises.forEach((ex, i) => {
+    const label = isSet(ex.superset_group)
+      ? ` [superset ${labels.get(ex.superset_group)}]`
+      : '';
+    text += `\n  ${i + 1}. ${ex.exercise_name ?? ex.exercise_id}${label}`;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sets: any[] = ex.sets ?? [];
+    if (sets.length > 0) {
+      const setLines = sets.map(formatPresetSet).filter(Boolean).join('; ');
+      text += `\n     ${sets.length} sets: ${setLines}`;
+    }
+  });
+  return text;
+}
+
+// A write echoes the persisted prescription back rather than a bare count: the
+// model has to see how names resolved and what actually landed before it can
+// edit with any confidence.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function presetWritten(verb: string, preset: any, createdNames: string[]) {
+  let text = formatConfirmation(
+    `Workout preset "${preset.name}" ${verb} (ID: ${preset.id}).`
+  );
+  if (createdNames.length > 0) {
+    text += `\nNew exercises added to your catalog: ${createdNames.join(', ')}.`;
+  }
+  return `${text}\n\n${formatPreset(preset)}`;
+}
+
+// A preset by id or name, or null. The service throws on a missing id while the
+// name lookup returns null; normalise both so callers see one shape.
+async function findPreset(
+  userId: string,
+  params: { preset_id?: number; preset_name?: string }
+) {
+  if (isSet(params.preset_id)) {
+    try {
+      return await workoutPresetService.getWorkoutPresetById(
+        userId,
+        params.preset_id
+      );
+    } catch (error) {
+      if (error instanceof Error && error.message.includes('not found')) {
+        return null;
+      }
+      throw error;
+    }
+  }
+  if (params.preset_name) {
+    return workoutPresetRepository.getWorkoutPresetByName(
+      userId,
+      params.preset_name
+    );
+  }
+  return null;
 }
 
 // MCP's date-range defaults: a single `date` overrides start/end; otherwise
@@ -259,7 +520,7 @@ async function getExerciseProgress(
   // Repository rows arrive in entry_date ASC order; the Map keeps it.
   const byDate = new Map<string, ProgressDay>();
   for (const entry of entries) {
-    const sets: ExerciseSetInput[] = entry.sets ?? [];
+    const sets: ExerciseSetRow[] = entry.sets ?? [];
     if (sets.length === 0) continue;
     const key = dayString(entry.entry_date);
     let day = byDate.get(key);
@@ -351,15 +612,21 @@ export function buildExerciseTools(userId: string, tz: string) {
 Actions:
 - search_exercises(searchTerm, muscleGroup?, equipment?, limit?, offset?)
 - create_exercise(name, category?, calories_per_hour?, description?)
-- log_exercise(entry_date, exercise_id?|exercise_name?, duration_minutes?, calories_burned?, notes?, distance?, avg_heart_rate?, steps?, sets?:JSON string or array of [{reps,weight,duration,rest_time,set_type,rpe,notes}]) — distance/avg_heart_rate/steps are for cardio
+- log_exercise(entry_date, exercise_id?|exercise_name?, duration_minutes?, calories_burned?, notes?, distance?, avg_heart_rate?, steps?, sets?:JSON string or array of [{reps,weight,duration_seconds,rest_time,set_type,rpe,notes}]) — distance/avg_heart_rate/steps are for cardio
 - list_exercise_diary(entry_date)
-- get_workout_presets()
+- get_workout_presets(preset_id?|preset_name?) — no argument lists every preset; either argument returns that one preset with its full prescription
 - log_workout_preset(entry_date, preset_id?|preset_name?)
 - update_exercise_entry(entry_id, entry_date?, duration_minutes?, calories_burned?, notes?, distance?, avg_heart_rate?, steps?, sets?) — only the provided fields change; sets, when provided, replace all existing sets
 - delete_exercise_entry(entry_id)
 - get_exercise_details(exercise_id?|exercise_name?)
-- create_workout_preset(name, exercise_ids)
-- get_exercise_progress(exercise_id?|exercise_name?, start_date?, end_date?, limit?, offset?) — returns paginated performance history`,
+- create_workout_preset(name, description?, is_public?, exercises?|exercise_ids?) — exercises is the full prescription: [{exercise_id?|exercise_name?, sort_order?, superset_group?, sets?:[{set_number?,set_type?,reps?,weight?,duration_seconds?,rest_time?,notes?}]}], as an array or JSON string. exercise_ids is a shorthand for a preset with no sets; give one or the other, not both. An exercise_name with no match is created. Exercises sharing a superset_group integer are performed as a superset
+- update_workout_preset(preset_id?|preset_name?, name?, description?, is_public?, exercises?) — exercises REPLACES every exercise and set in the preset; omit it to rename without touching the prescription
+- delete_workout_preset(preset_id?|preset_name?)
+- get_exercise_progress(exercise_id?|exercise_name?, start_date?, end_date?, limit?, offset?) — returns paginated performance history
+
+Units, everywhere: weight is kg; duration_seconds and rest_time are SECONDS (a 30s hold is 30). duration_minutes, on the entry itself, is minutes.
+Workout preset IDs are integers; exercise IDs are UUIDs.
+set_type accepts: Normal, Working Set, Warm-up, Drop Set, Failure, AMRAP, Back-off, Rest-Pause, Cluster, Technique.`,
       inputSchema: manageExerciseInput,
       execute: async (rawArgs) => {
         const normalized = normalizeActionArgs(
@@ -473,33 +740,9 @@ Actions:
               }
               let exerciseId = args.exercise_id;
               if (!exerciseId && args.exercise_name) {
-                // Exact match first, then fuzzy, then auto-create — MCP's
-                // resolution order.
-                const rows = await exerciseService.searchExercises(
-                  userId,
-                  args.exercise_name,
-                  userId,
-                  undefined,
-                  undefined
-                );
-                const name = args.exercise_name.toLowerCase();
-                const found =
-                  rows.find(
-                    (e: any) => String(e.name).toLowerCase() === name
-                  ) ?? rows[0];
-                if (found) {
-                  exerciseId = found.id;
-                } else {
-                  const created = await exerciseService.createExercise(userId, {
-                    name: args.exercise_name,
-                    category: 'custom',
-                    calories_per_hour: 300,
-                    is_custom: true,
-                    shared_with_public: false,
-                    source: 'manual',
-                  });
-                  exerciseId = created.id;
-                }
+                exerciseId = (
+                  await resolveExerciseByName(userId, args.exercise_name)
+                ).id;
               }
               // skipDuplicateCheck: logging the same exercise twice in a day
               // must create two entries (MCP always inserted), not merge into
@@ -548,7 +791,7 @@ Actions:
                 `Exercise Diary: ${args.entry_date}`,
                 (e: any) => {
                   let text = `**${e.name}**`;
-                  const sets: ExerciseSetInput[] = e.sets ?? [];
+                  const sets: ExerciseSetRow[] = e.sets ?? [];
                   if (sets.length > 0) text += ` — ${sets.length} sets`;
                   if (e.duration_minutes)
                     text += ` | ${e.duration_minutes} min`;
@@ -563,7 +806,9 @@ Actions:
                         const parts: string[] = [];
                         if (isSet(s.reps)) parts.push(`${s.reps}r`);
                         if (isSet(s.weight)) parts.push(`${s.weight}kg`);
-                        if (isSet(s.duration)) parts.push(`${s.duration}s`);
+                        // The column is minutes; this surface reports seconds.
+                        if (isSet(s.duration))
+                          parts.push(`${minutesToSeconds(s.duration)}s`);
                         if (isSet(s.rpe)) parts.push(`RPE ${s.rpe}`);
                         let str = parts.join('×');
                         if (isSet(s.rest_time))
@@ -583,17 +828,22 @@ Actions:
             }
 
             case 'get_workout_presets': {
+              if (args.preset_id || args.preset_name) {
+                const preset = await findPreset(userId, args);
+                if (!preset) {
+                  return ERRORS.NOT_FOUND(
+                    'Workout preset',
+                    String(args.preset_id ?? args.preset_name)
+                  );
+                }
+                return formatList([preset], 'Workout Preset', formatPreset);
+              }
               const { presets } = await workoutPresetService.getWorkoutPresets(
                 userId,
                 1,
                 1000
               );
-              return formatList(
-                presets,
-                'Workout Presets',
-                (p: any) =>
-                  `**${p.name}** — ${p.exercises.length} exercises\n  ID: ${p.id}`
-              );
+              return formatList(presets, 'Workout Presets', formatPreset);
             }
 
             case 'log_workout_preset': {
@@ -706,21 +956,93 @@ Actions:
             }
 
             case 'create_workout_preset': {
+              if (args.exercises && args.exercise_ids) {
+                return ERRORS.VALIDATION(
+                  'Provide either exercises (with sets) or exercise_ids (shorthand), not both'
+                );
+              }
+              if (!args.exercises && !args.exercise_ids) {
+                return ERRORS.VALIDATION(
+                  'Either exercises or exercise_ids must be provided'
+                );
+              }
+              const input: PresetExerciseInput[] =
+                parseJsonArray<PresetExerciseInput>(
+                  args.exercises,
+                  'exercises'
+                ) ??
+                (args.exercise_ids ?? []).map((id) => ({ exercise_id: id }));
+              const { exercises, createdNames } = await buildPresetExercises(
+                userId,
+                input
+              );
               const preset = await workoutPresetService.createWorkoutPreset(
                 userId,
                 {
                   user_id: userId,
                   name: args.name,
-                  description: null,
-                  is_public: false,
-                  exercises: args.exercise_ids.map((exerciseId, i) => ({
-                    exercise_id: exerciseId,
-                    sort_order: i,
-                  })),
+                  description: args.description ?? null,
+                  is_public: args.is_public ?? false,
+                  exercises,
                 }
               );
+              return presetWritten('created', preset, createdNames);
+            }
+
+            case 'update_workout_preset': {
+              if (!args.preset_id && !args.preset_name) {
+                return ERRORS.VALIDATION(
+                  'Either preset_id or preset_name must be provided'
+                );
+              }
+              const existing = await findPreset(userId, args);
+              if (!existing) {
+                return ERRORS.NOT_FOUND(
+                  'Workout preset',
+                  String(args.preset_id ?? args.preset_name ?? 'unknown')
+                );
+              }
+              const input = parseJsonArray<PresetExerciseInput>(
+                args.exercises,
+                'exercises'
+              );
+              // Omitted exercises must stay omitted, not become []: the repo
+              // only rewrites the exercise rows when the key is present.
+              const built = input
+                ? await buildPresetExercises(userId, input)
+                : { exercises: undefined, createdNames: [] };
+              const preset = await workoutPresetService.updateWorkoutPreset(
+                userId,
+                existing.id,
+                {
+                  name: args.name,
+                  description: args.description,
+                  is_public: args.is_public,
+                  exercises: built.exercises,
+                }
+              );
+              return presetWritten('updated', preset, built.createdNames);
+            }
+
+            case 'delete_workout_preset': {
+              if (!args.preset_id && !args.preset_name) {
+                return ERRORS.VALIDATION(
+                  'Either preset_id or preset_name must be provided'
+                );
+              }
+              const existing = await findPreset(userId, args);
+              if (!existing) {
+                return ERRORS.NOT_FOUND(
+                  'Workout preset',
+                  String(args.preset_id ?? args.preset_name ?? 'unknown')
+                );
+              }
+              await workoutPresetService.deleteWorkoutPreset(
+                userId,
+                existing.id
+              );
               return formatConfirmation(
-                `Workout preset "${preset.name}" created with ${preset.exercises.length} exercises.`
+                `Workout preset "${existing.name}" deleted.`
               );
             }
 
@@ -753,7 +1075,23 @@ Actions:
               );
           }
         } catch (error) {
+          if (error instanceof ToolValidationError) {
+            return ERRORS.VALIDATION(error.message);
+          }
           log('error', '[Exercise Tool] Error:', error);
+          if (error instanceof Error && error.message.startsWith('Forbidden')) {
+            return ERRORS.FORBIDDEN(error.message);
+          }
+          // The preset service names the exercise it couldn't resolve; passing
+          // that through beats a generic "Resource with ID 'unknown'" when a
+          // preset references an exercise that isn't there.
+          const unresolved =
+            error instanceof Error
+              ? /^Exercise with ID (.+?) not found/.exec(error.message)
+              : null;
+          if (unresolved) {
+            return ERRORS.NOT_FOUND('Exercise', unresolved[1]);
+          }
           if (error instanceof Error && error.message.includes('not found')) {
             return ERRORS.NOT_FOUND('Resource', 'unknown');
           }
