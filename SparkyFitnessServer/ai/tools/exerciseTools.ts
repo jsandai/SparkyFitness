@@ -54,16 +54,23 @@ function isSet<T>(value: T | null | undefined): value is T {
   return value !== null && value !== undefined;
 }
 
-// The set `duration` column is MINUTES; this tool surface speaks SECONDS (see
-// durationSecondsSchema). Convert at the repository boundary, in one place, so
-// the unit can't drift back. The column is numeric, so fractions are safe: a
-// 30-second hold round-trips as 0.5 minutes.
+// The set `duration` column is MINUTES — shared with the web UI, mobile, the
+// REST API and the CSV importer, so this tool can't change it. But minutes is
+// the wrong unit for a set (holds and carries are seconds, and `rest_time`
+// right next to it IS seconds), so the tool surface speaks seconds and shims
+// the unit here, in one place, at the repository boundary.
+//
+// The shim has to round on the way back. seconds/60*60 is NOT the identity in
+// floating point: 202 of the first 7200 whole seconds don't survive it, so a
+// 31-second hold would otherwise read back as 31.000000000000004s. Two decimals
+// keeps any duration a human would enter and kills the float dust.
 function secondsToMinutes(seconds: number | null | undefined): number | null {
   return isSet(seconds) ? seconds / 60 : null;
 }
 
 function minutesToSeconds(minutes: number | null | undefined): number | null {
-  return isSet(minutes) ? Number(minutes) * 60 : null;
+  if (!isSet(minutes)) return null;
+  return Math.round(Number(minutes) * 60 * 100) / 100;
 }
 
 // The AI layer historically emitted 'Warmup'; the web UI's vocabulary spells it

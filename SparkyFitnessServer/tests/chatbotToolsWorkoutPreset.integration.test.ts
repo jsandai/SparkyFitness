@@ -337,6 +337,33 @@ describe.runIf(RUN)('workout preset authoring via MCP tools', () => {
     }
   });
 
+  it('round-trips a hold whose seconds do not divide cleanly into minutes', async () => {
+    // 31s is one of the 202 values in 1..7200 for which seconds/60*60 !== seconds
+    // in floating point. Without rounding on the read side it comes back as
+    // 31.000000000000004s. This is the regression test for that.
+    await tools.sparky_manage_exercise.execute!(
+      {
+        action: 'create_workout_preset',
+        name: 'Awkward Hold',
+        exercises: [
+          {
+            exercise_name: 'Dead Hang',
+            sets: [{ duration_seconds: 31, rest_time: 60 }],
+          },
+        ],
+      },
+      opts
+    );
+
+    const readBack = await tools.sparky_manage_exercise.execute!(
+      { action: 'get_workout_presets', preset_name: 'Awkward Hold' },
+      opts
+    );
+
+    expect(readBack).toContain('1 sets: 31s (rest 60s)');
+    expect(readBack).not.toContain('31.0');
+  });
+
   it('reuses an exercise it already created rather than duplicating it', async () => {
     // "Double KB Swing" appears in three presets; the name must resolve to the
     // one catalog row every time, or the user's exercise library fills with
