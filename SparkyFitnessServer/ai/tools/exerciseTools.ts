@@ -6,7 +6,6 @@ import exerciseService from '../../services/exerciseService.js';
 import workoutPresetService from '../../services/workoutPresetService.js';
 import exerciseDb from '../../models/exercise.js';
 import exerciseEntryDb from '../../models/exerciseEntry.js';
-import workoutPresetRepository from '../../models/workoutPresetRepository.js';
 import { ERRORS, formatZodError } from './errors.js';
 import {
   compactRecord,
@@ -23,6 +22,7 @@ import {
 import {
   manageExerciseSchema,
   manageExerciseInput,
+  presetExerciseArraySchema,
   type ManageExerciseInput,
 } from './schemas/exercise.js';
 import { optionalDateSchema } from './schemas/common.js';
@@ -173,24 +173,37 @@ function toPresetSets(sets: PresetSetInput[]) {
   }));
 }
 
-// Models serialise nested arrays as JSON strings. Absent stays absent; a
-// malformed or non-array string is the caller's mistake, not a DB failure.
-function parseJsonArray<T>(
-  value: T[] | string | undefined,
-  field: string
-): T[] | undefined {
+// Models serialise nested arrays as JSON strings, so `exercises` may arrive as
+// an array (already checked by the strict union) or as a string (whose CONTENTS
+// nothing has checked). Decode, then run the decoded value through the same zod
+// schema the array form gets — otherwise the string path is a validation hole:
+// `{"sets": 3}` would sail through and crash in toPresetSets, and a bogus
+// set_type or superset_group would reach the INSERT unchecked.
+//
+// A malformed or mistyped payload is the caller's mistake, not a DB failure.
+function parsePresetExercises(
+  value: PresetExerciseInput[] | string | undefined
+): PresetExerciseInput[] | undefined {
   if (value === undefined) return undefined;
-  if (typeof value !== 'string') return value;
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(value);
-  } catch {
-    throw new ToolValidationError(`Invalid JSON format for ${field}`);
+  let decoded: unknown = value;
+  if (typeof value === 'string') {
+    try {
+      decoded = JSON.parse(value);
+    } catch {
+      throw new ToolValidationError('Invalid JSON format for exercises');
+    }
   }
-  if (!Array.isArray(parsed)) {
-    throw new ToolValidationError(`${field} must be an array`);
+  const parsed = presetExerciseArraySchema.safeParse(decoded);
+  if (!parsed.success) {
+    throw new ToolValidationError(
+      `exercises: ${parsed.error.issues
+        .map((i) =>
+          i.path.length > 0 ? `${i.path.join('.')}: ${i.message}` : i.message
+        )
+        .join('; ')}`
+    );
   }
-  return parsed as T[];
+  return parsed.data as PresetExerciseInput[];
 }
 
 // Resolution order for a free-text exercise name: exact case-insensitive match,
@@ -353,7 +366,7 @@ async function findPreset(
     }
   }
   if (params.preset_name) {
-    return workoutPresetRepository.getWorkoutPresetByName(
+    return workoutPresetService.getWorkoutPresetByName(
       userId,
       params.preset_name
     );
@@ -862,7 +875,7 @@ set_type accepts: Normal, Working Set, Warm-up, Drop Set, Failure, AMRAP, Back-o
               let presetId = args.preset_id;
               if (!presetId && args.preset_name) {
                 const preset =
-                  await workoutPresetRepository.getWorkoutPresetByName(
+                  await workoutPresetService.getWorkoutPresetByName(
                     userId,
                     args.preset_name
                   );
@@ -974,10 +987,7 @@ set_type accepts: Normal, Working Set, Warm-up, Drop Set, Failure, AMRAP, Back-o
                 );
               }
               const input: PresetExerciseInput[] =
-                parseJsonArray<PresetExerciseInput>(
-                  args.exercises,
-                  'exercises'
-                ) ??
+                parsePresetExercises(args.exercises) ??
                 (args.exercise_ids ?? []).map((id) => ({ exercise_id: id }));
               const { exercises, createdNames } = await buildPresetExercises(
                 userId,
@@ -1009,10 +1019,7 @@ set_type accepts: Normal, Working Set, Warm-up, Drop Set, Failure, AMRAP, Back-o
                   String(args.preset_id ?? args.preset_name ?? 'unknown')
                 );
               }
-              const input = parseJsonArray<PresetExerciseInput>(
-                args.exercises,
-                'exercises'
-              );
+              const input = parsePresetExercises(args.exercises);
               // Omitted exercises must stay omitted, not become []: the repo
               // only rewrites the exercise rows when the key is present.
               const built = input

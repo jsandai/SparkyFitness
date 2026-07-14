@@ -5,7 +5,6 @@ import exerciseService from '../services/exerciseService.js';
 import workoutPresetService from '../services/workoutPresetService.js';
 import exerciseDb from '../models/exercise.js';
 import exerciseEntryDb from '../models/exerciseEntry.js';
-import workoutPresetRepository from '../models/workoutPresetRepository.js';
 
 vi.mock('../services/exerciseService', () => ({
   default: {
@@ -25,6 +24,7 @@ vi.mock('../services/workoutPresetService', () => ({
   default: {
     getWorkoutPresets: vi.fn(),
     getWorkoutPresetById: vi.fn(),
+    getWorkoutPresetByName: vi.fn(),
     createWorkoutPreset: vi.fn(),
     updateWorkoutPreset: vi.fn(),
     deleteWorkoutPreset: vi.fn(),
@@ -42,11 +42,6 @@ vi.mock('../models/exerciseEntry', () => ({
     getDailyExerciseTotalsRange: vi.fn(),
     getRecentExerciseEntries: vi.fn(),
     getExerciseUsage: vi.fn(),
-  },
-}));
-vi.mock('../models/workoutPresetRepository', () => ({
-  default: {
-    getWorkoutPresetByName: vi.fn(),
   },
 }));
 vi.mock('../config/logging', () => ({
@@ -743,9 +738,10 @@ describe('workout presets', () => {
   });
 
   it('log_workout_preset resolves the preset by name and logs a grouped session', async () => {
-    vi.mocked(workoutPresetRepository.getWorkoutPresetByName).mockResolvedValue(
-      { id: 7, name: 'Push Day' }
-    );
+    vi.mocked(workoutPresetService.getWorkoutPresetByName).mockResolvedValue({
+      id: 7,
+      name: 'Push Day',
+    });
     vi.mocked(exerciseService.logWorkoutPresetGrouped).mockResolvedValue({
       id: 'pe-1',
       exercises: [{}, {}],
@@ -764,7 +760,7 @@ describe('workout presets', () => {
     expect(result).toBe(
       '✅ Workout preset logged for 2026-06-10. 2 exercises added.'
     );
-    expect(workoutPresetRepository.getWorkoutPresetByName).toHaveBeenCalledWith(
+    expect(workoutPresetService.getWorkoutPresetByName).toHaveBeenCalledWith(
       'user-1',
       'Push Day'
     );
@@ -777,7 +773,7 @@ describe('workout presets', () => {
   });
 
   it('log_workout_preset reports an unknown preset name as not found', async () => {
-    vi.mocked(workoutPresetRepository.getWorkoutPresetByName).mockResolvedValue(
+    vi.mocked(workoutPresetService.getWorkoutPresetByName).mockResolvedValue(
       null
     );
     const result = await tools.sparky_manage_exercise.execute!(
@@ -1021,6 +1017,38 @@ describe('workout presets', () => {
     expect(workoutPresetService.createWorkoutPreset).not.toHaveBeenCalled();
   });
 
+  it('validates the CONTENTS of a JSON-string exercises payload', async () => {
+    // The strict union only checks that `exercises` is a string. Before the
+    // decoded value was re-validated, `sets: 3` sailed through and crashed in
+    // toPresetSets with "sets.map is not a function".
+    const result = await tools.sparky_manage_exercise.execute!(
+      {
+        action: 'create_workout_preset',
+        name: 'Kettlebell A',
+        exercises: JSON.stringify([{ exercise_id: EXERCISE_ID, sets: 3 }]),
+      },
+      opts
+    );
+
+    expect(result).toContain('Error [VALIDATION]');
+    expect(result).toContain('exercises');
+    expect(workoutPresetService.createWorkoutPreset).not.toHaveBeenCalled();
+  });
+
+  it('rejects a JSON-string exercises payload that is not an array', async () => {
+    const result = await tools.sparky_manage_exercise.execute!(
+      {
+        action: 'create_workout_preset',
+        name: 'Kettlebell A',
+        exercises: JSON.stringify({ exercise_id: EXERCISE_ID }),
+      },
+      opts
+    );
+
+    expect(result).toContain('Error [VALIDATION]');
+    expect(workoutPresetService.createWorkoutPreset).not.toHaveBeenCalled();
+  });
+
   it('create_workout_preset rejects exercises and exercise_ids together', async () => {
     const result = await tools.sparky_manage_exercise.execute!(
       {
@@ -1133,9 +1161,10 @@ describe('workout presets', () => {
   });
 
   it('update_workout_preset replaces the exercises and their sets', async () => {
-    vi.mocked(workoutPresetRepository.getWorkoutPresetByName).mockResolvedValue(
-      { id: 7, name: 'Push Day' }
-    );
+    vi.mocked(workoutPresetService.getWorkoutPresetByName).mockResolvedValue({
+      id: 7,
+      name: 'Push Day',
+    });
     vi.mocked(workoutPresetService.updateWorkoutPreset).mockResolvedValue({
       id: 7,
       name: 'Push Day',
@@ -1229,7 +1258,7 @@ describe('workout presets', () => {
   });
 
   it('update_workout_preset reports an unknown preset as not found', async () => {
-    vi.mocked(workoutPresetRepository.getWorkoutPresetByName).mockResolvedValue(
+    vi.mocked(workoutPresetService.getWorkoutPresetByName).mockResolvedValue(
       null
     );
     const result = await tools.sparky_manage_exercise.execute!(
@@ -1243,9 +1272,10 @@ describe('workout presets', () => {
   });
 
   it('delete_workout_preset removes the preset by name', async () => {
-    vi.mocked(workoutPresetRepository.getWorkoutPresetByName).mockResolvedValue(
-      { id: 7, name: 'Push Day' }
-    );
+    vi.mocked(workoutPresetService.getWorkoutPresetByName).mockResolvedValue({
+      id: 7,
+      name: 'Push Day',
+    });
     vi.mocked(workoutPresetService.deleteWorkoutPreset).mockResolvedValue({
       message: 'Workout preset deleted successfully.',
     });

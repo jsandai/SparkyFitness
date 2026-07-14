@@ -310,6 +310,11 @@ const presetExerciseSchema = z
 
 // Nested arrays reach us as JSON strings when the model serialises them; the
 // handler parses the string form. Mirrors `sets` on log_exercise.
+// The array form, exported so the handler can re-validate the JSON-string form
+// after parsing it. Without this the string path is a hole: zod checks that
+// `exercises` is a string, and nothing checks what the string decodes to.
+export const presetExerciseArraySchema = z.array(presetExerciseSchema);
+
 const presetExercisesSchema = z
   .union([z.array(presetExerciseSchema), z.string()])
   .describe('Exercises as an array of objects or a JSON string');
