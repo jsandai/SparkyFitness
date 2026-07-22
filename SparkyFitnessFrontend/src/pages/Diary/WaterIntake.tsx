@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { instantHourMinute, dayToUtcRange } from '@workspace/shared';
 import { useTranslation } from 'react-i18next';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -13,6 +13,7 @@ import {
   Plus,
   Minus,
   Trash2,
+  Clock,
 } from 'lucide-react';
 import { useAuth } from '@/hooks/useAuth';
 import { usePreferences } from '@/contexts/PreferencesContext';
@@ -31,6 +32,92 @@ import {
 interface WaterIntakeProps {
   selectedDate: string;
 }
+
+interface DrinkTimeEditorProps {
+  // 24-hour "HH:MM" seed for both the text field and the native picker.
+  initialValue: string;
+  label: string;
+  onCommit: (rawValue: string) => void;
+  onCancel: () => void;
+}
+
+// Inline time editor for a logged drink. The text field accepts free-form
+// entry (24h "2210"/"22:10" or 12h "230pm"); the clock button opens the
+// browser's native time picker for pointer-first users. Both routes funnel
+// through onCommit, which normalizes before saving.
+const DrinkTimeEditor = ({
+  initialValue,
+  label,
+  onCommit,
+  onCancel,
+}: DrinkTimeEditorProps) => {
+  const pickerRef = useRef<HTMLInputElement>(null);
+
+  const openPicker = () => {
+    const el = pickerRef.current;
+    if (!el) return;
+    try {
+      // showPicker() is the reliable way to open the native time UI on demand.
+      (el as HTMLInputElement & { showPicker?: () => void }).showPicker?.();
+    } catch {
+      // Older browsers: fall back to focusing the native input.
+      el.focus();
+    }
+  };
+
+  return (
+    <div className="flex items-center gap-0.5">
+      <input
+        type="text"
+        inputMode="numeric"
+        maxLength={8}
+        placeholder="HH:MM"
+        aria-label={label}
+        className="text-xs tabular-nums bg-white dark:bg-slate-700 border border-blue-300 dark:border-blue-600 rounded px-1 py-0.5 text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-400 w-[72px]"
+        defaultValue={initialValue}
+        onFocus={(e) => e.target.select()}
+        onBlur={(e) => {
+          // Ignore blurs caused by interacting with our own picker/button,
+          // so opening the native picker doesn't prematurely commit + unmount.
+          const next = e.relatedTarget as Node | null;
+          if (next && e.currentTarget.parentElement?.contains(next)) return;
+          onCommit(e.target.value);
+        }}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter') {
+            onCommit((e.target as HTMLInputElement).value);
+          } else if (e.key === 'Escape') {
+            onCancel();
+          }
+        }}
+        autoFocus
+      />
+      <button
+        type="button"
+        aria-label={label}
+        title={label}
+        className="text-gray-400 hover:text-blue-500 dark:hover:text-blue-400 shrink-0 p-0.5"
+        // Prevent the text field from blurring (and committing) before the
+        // picker opens.
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={openPicker}
+      >
+        <Clock className="h-3.5 w-3.5" />
+      </button>
+      <input
+        ref={pickerRef}
+        type="time"
+        aria-hidden="true"
+        tabIndex={-1}
+        className="sr-only"
+        defaultValue={initialValue}
+        onChange={(e) => {
+          if (e.target.value) onCommit(e.target.value);
+        }}
+      />
+    </div>
+  );
+};
 
 const WaterIntake = ({ selectedDate }: WaterIntakeProps) => {
   const { t } = useTranslation();
@@ -150,6 +237,76 @@ const WaterIntake = ({ selectedDate }: WaterIntakeProps) => {
     } catch {
       return '12:00';
     }
+  };
+
+  // Normalize free-form time entry into a 24-hour "HH:MM" string.
+  // Un-suffixed input is treated as 24-hour: "2210", "22:10", "930", "9:5",
+  // "22" (-> 22:00). An explicit AM/PM suffix switches to 12-hour parsing:
+  // "230pm" -> 22:30, "12:15am" -> 00:15, "12pm" -> 12:00. Returns null when
+  // the value can't be parsed into a valid time so the caller can reject it
+  // instead of committing a bad instant.
+  const normalizeTimeInput = (raw: string): string | null => {
+    const trimmed = raw.trim();
+    if (!trimmed) return null;
+
+    // Parse a trailing am/pm token BEFORE stripping non-digits, so a meridiem
+    // is never silently discarded. Accepts "pm", "p", "p.m.", " PM", etc.
+    const meridiemMatch = trimmed.match(/([ap])\.?\s*m?\.?\s*$/i);
+    let meridiem: 'a' | 'p' | null = null;
+    let timePart = trimmed;
+    if (meridiemMatch && meridiemMatch.index !== undefined) {
+      meridiem = (meridiemMatch[1] || '').toLowerCase() === 'p' ? 'p' : 'a';
+      timePart = trimmed.slice(0, meridiemMatch.index).trim();
+    }
+    if (!timePart) return null;
+
+    let hours: number;
+    let minutes: number;
+
+    if (timePart.includes(':')) {
+      const [h, m] = timePart.split(':');
+      hours = parseInt(h || '', 10);
+      minutes = parseInt(m || '0', 10);
+    } else {
+      const digits = timePart.replace(/\D/g, '');
+      if (!digits) return null;
+      if (digits.length <= 2) {
+        hours = parseInt(digits, 10);
+        minutes = 0;
+      } else {
+        // last two digits are minutes, everything before is the hour
+        hours = parseInt(digits.slice(0, -2), 10);
+        minutes = parseInt(digits.slice(-2), 10);
+      }
+    }
+
+    if (Number.isNaN(hours) || Number.isNaN(minutes)) return null;
+    if (minutes < 0 || minutes > 59) return null;
+
+    if (meridiem) {
+      // 12-hour: valid clock hours are 1..12; 12am -> 0, 12pm -> 12.
+      if (hours < 1 || hours > 12) return null;
+      if (meridiem === 'p' && hours < 12) hours += 12;
+      if (meridiem === 'a' && hours === 12) hours = 0;
+    } else if (hours < 0 || hours > 23) {
+      return null;
+    }
+
+    return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}`;
+  };
+
+  const commitTimeChange = (
+    entryId: string,
+    entryDate: string,
+    rawValue: string
+  ) => {
+    const normalized = normalizeTimeInput(rawValue);
+    if (!normalized) {
+      // Unparseable entry — cancel the edit and keep the original time.
+      setEditingTimeId(null);
+      return;
+    }
+    handleTimeChange(entryId, entryDate, normalized);
   };
 
   const handleTimeChange = (
@@ -347,31 +504,22 @@ const WaterIntake = ({ selectedDate }: WaterIntakeProps) => {
                   >
                     <div className="flex items-center gap-2 min-w-0">
                       {editingTimeId === entry.id ? (
-                        <input
-                          type="time"
-                          className="text-xs tabular-nums bg-white dark:bg-slate-700 border border-blue-300 dark:border-blue-600 rounded px-1 py-0.5 text-gray-700 dark:text-gray-200 focus:outline-none focus:ring-1 focus:ring-blue-400 w-[72px]"
-                          defaultValue={getTimeInputValue(
+                        <DrinkTimeEditor
+                          label={t(
+                            'foodDiary.waterIntake.editTime',
+                            'Click to change time'
+                          )}
+                          initialValue={getTimeInputValue(
                             entry.logged_at || entry.created_at
                           )}
-                          onBlur={(e) =>
-                            handleTimeChange(
+                          onCommit={(rawValue) =>
+                            commitTimeChange(
                               entry.id,
                               entry.entry_date,
-                              e.target.value
+                              rawValue
                             )
                           }
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') {
-                              handleTimeChange(
-                                entry.id,
-                                entry.entry_date,
-                                (e.target as HTMLInputElement).value
-                              );
-                            } else if (e.key === 'Escape') {
-                              setEditingTimeId(null);
-                            }
-                          }}
-                          autoFocus
+                          onCancel={() => setEditingTimeId(null)}
                         />
                       ) : (
                         <button

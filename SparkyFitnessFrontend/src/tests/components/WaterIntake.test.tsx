@@ -5,6 +5,8 @@ import { useWaterContainer } from '@/contexts/WaterContainerContext';
 import {
   useWaterIntakeQuery,
   useUpdateWaterIntakeMutation,
+  useWaterIntakeLogQuery,
+  useUpdateWaterIntakeLogTimeMutation,
 } from '@/hooks/Diary/useWaterIntake';
 import { renderWithClient } from '../test-utils';
 
@@ -84,6 +86,7 @@ jest.mock('lucide-react', () => ({
   Plus: () => <div data-testid="plus-icon" />,
   Minus: () => <div data-testid="minus-icon" />,
   Trash2: () => <div data-testid="trash-icon" />,
+  Clock: () => <div data-testid="clock-icon" />,
 }));
 
 const mockContainers = [
@@ -157,6 +160,127 @@ describe('WaterIntake Component', () => {
       entry_date: '2023-10-27',
       change_drinks: 1,
       container_id: 2, // Home Glass
+    });
+  });
+
+  describe('drink-log time editing', () => {
+    const mockLogEntry = {
+      id: 'log-1',
+      entry_date: '2023-10-27T00:00:00.000Z',
+      logged_at: '2023-10-27T12:00:00.000Z',
+      created_at: '2023-10-27T12:00:00.000Z',
+      water_ml: 500,
+      container_name: 'Work Bottle',
+    };
+    const mockUpdateLogTime = jest.fn();
+
+    beforeEach(() => {
+      (useWaterIntakeLogQuery as jest.Mock).mockReturnValue({
+        data: [mockLogEntry],
+      });
+      (useUpdateWaterIntakeLogTimeMutation as jest.Mock).mockReturnValue({
+        mutate: mockUpdateLogTime,
+        isPending: false,
+      });
+    });
+
+    const openTimeEditor = () => {
+      // "Today's drinks" log is collapsed by default; expand it, then click
+      // the time button (rendered as the mocked instantHourMinute -> "12:00").
+      // The mocked t() returns raw i18n keys, so match on the logTitle key.
+      fireEvent.click(screen.getByText(/logTitle/i));
+      fireEvent.click(screen.getByText('12:00'));
+      return screen.getByPlaceholderText('HH:MM') as HTMLInputElement;
+    };
+
+    it('accepts bare 24-hour digits ("2210") and commits the parsed instant', () => {
+      renderWithClient(<WaterIntake selectedDate="2023-10-27" />);
+      const input = openTimeEditor();
+
+      fireEvent.change(input, { target: { value: '2210' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      expect(mockUpdateLogTime).toHaveBeenCalledWith({
+        logId: 'log-1',
+        // dayToUtcRange mock start (2023-10-27T00:00Z) + 22h10m
+        loggedAt: '2023-10-27T22:10:00.000Z',
+      });
+    });
+
+    it('accepts colon-separated 24-hour time ("22:10")', () => {
+      renderWithClient(<WaterIntake selectedDate="2023-10-27" />);
+      const input = openTimeEditor();
+
+      fireEvent.change(input, { target: { value: '22:10' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      expect(mockUpdateLogTime).toHaveBeenCalledWith({
+        logId: 'log-1',
+        loggedAt: '2023-10-27T22:10:00.000Z',
+      });
+    });
+
+    it('rejects an out-of-range time without committing', () => {
+      renderWithClient(<WaterIntake selectedDate="2023-10-27" />);
+      const input = openTimeEditor();
+
+      fireEvent.change(input, { target: { value: '9999' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      expect(mockUpdateLogTime).not.toHaveBeenCalled();
+    });
+
+    it('parses a 12-hour PM time ("230pm") to 24-hour', () => {
+      renderWithClient(<WaterIntake selectedDate="2023-10-27" />);
+      const input = openTimeEditor();
+
+      fireEvent.change(input, { target: { value: '230pm' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      expect(mockUpdateLogTime).toHaveBeenCalledWith({
+        logId: 'log-1',
+        loggedAt: '2023-10-27T14:30:00.000Z', // 2:30 PM
+      });
+    });
+
+    it('parses "12:15am" as after-midnight (00:15)', () => {
+      renderWithClient(<WaterIntake selectedDate="2023-10-27" />);
+      const input = openTimeEditor();
+
+      fireEvent.change(input, { target: { value: '12:15am' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      expect(mockUpdateLogTime).toHaveBeenCalledWith({
+        logId: 'log-1',
+        loggedAt: '2023-10-27T00:15:00.000Z',
+      });
+    });
+
+    it('rejects an invalid 12-hour hour ("13pm")', () => {
+      renderWithClient(<WaterIntake selectedDate="2023-10-27" />);
+      const input = openTimeEditor();
+
+      fireEvent.change(input, { target: { value: '13pm' } });
+      fireEvent.keyDown(input, { key: 'Enter' });
+
+      expect(mockUpdateLogTime).not.toHaveBeenCalled();
+    });
+
+    it('commits the native picker value (24-hour HH:MM) on change', () => {
+      renderWithClient(<WaterIntake selectedDate="2023-10-27" />);
+      openTimeEditor();
+
+      // The clock button reveals a hidden native <input type="time">; selecting
+      // a value fires onChange with a 24-hour "HH:MM" string.
+      const picker = document.querySelector(
+        'input[type="time"]'
+      ) as HTMLInputElement;
+      fireEvent.change(picker, { target: { value: '18:45' } });
+
+      expect(mockUpdateLogTime).toHaveBeenCalledWith({
+        logId: 'log-1',
+        loggedAt: '2023-10-27T18:45:00.000Z',
+      });
     });
   });
 
