@@ -2,10 +2,25 @@ import { z } from 'zod';
 import {
   dateSchema,
   optionalEntryTimeSchema,
+  presetIdSchema,
   setTypeEnum,
   paginationSchema,
   uuidSchema,
 } from './common.js';
+
+// Everything time-shaped on this tool surface is SECONDS.
+//
+// The underlying column is minutes (`exercise_entry_sets.duration`), and this
+// schema used to expose it as `duration` while describing it as "seconds" — so
+// a 30-second hold was stored as 30 minutes. Rather than propagate a unit that
+// nobody thinks in for holds and carries (and that sits next to `rest_time`,
+// which really is seconds), the tool speaks seconds and converts at the
+// repository boundary. The name carries the unit so it can't drift again.
+const durationSecondsSchema = z.coerce
+  .number()
+  .min(0)
+  .optional()
+  .describe('Work duration in SECONDS (e.g. a 30s hold is 30)');
 
 const exerciseSetSchema = z
   .object({
@@ -16,11 +31,7 @@ const exerciseSetSchema = z
       .optional()
       .describe('Number of repetitions'),
     weight: z.coerce.number().min(0).optional().describe('Weight in kg'),
-    duration: z.coerce
-      .number()
-      .min(0)
-      .optional()
-      .describe('Duration in seconds'),
+    duration_seconds: durationSecondsSchema,
     rest_time: z.coerce
       .number()
       .min(0)
@@ -138,13 +149,22 @@ const listExerciseDiarySchema = z
 const getWorkoutPresetsSchema = z
   .object({
     action: z.literal('get_workout_presets'),
+    preset_id: presetIdSchema
+      .optional()
+      .describe('Return just this preset, in full'),
+    preset_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('Return just this preset, in full (alternative to ID)'),
   })
   .strict();
 
 const logWorkoutPresetSchema = z
   .object({
     action: z.literal('log_workout_preset'),
-    preset_id: uuidSchema.optional().describe('UUID of the workout preset'),
+    preset_id: presetIdSchema.optional().describe('ID of the workout preset'),
     preset_name: z
       .string()
       .min(1)
@@ -223,13 +243,133 @@ const getExerciseDetailsSchema = z
   })
   .strict();
 
+// workout_preset_exercise_sets has no rpe column, so a preset set is not an
+// exerciseSetSchema. set_number is NOT NULL in the DB but defaulted from array
+// position here, so the model never has to number its own sets.
+const presetSetSchema = z
+  .object({
+    set_number: z.coerce
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe('1-based set position; defaults to the order given'),
+    set_type: setTypeEnum.optional(),
+    reps: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe('Number of repetitions'),
+    weight: z.coerce.number().min(0).optional().describe('Weight in kg'),
+    duration_seconds: durationSecondsSchema,
+    rest_time: z.coerce
+      .number()
+      .min(0)
+      .optional()
+      .describe('Rest time in seconds'),
+    notes: z.string().max(1000).optional().describe('Note for this set'),
+  })
+  .strict();
+
+const presetExerciseSchema = z
+  .object({
+    exercise_id: z
+      .string()
+      .min(1)
+      .optional()
+      .describe('Exercise UUID, or a free-exercise-db source id'),
+    exercise_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe(
+        'Exercise name (alternative to exercise_id); created if no exercise matches'
+      ),
+    sort_order: z.coerce
+      .number()
+      .int()
+      .min(0)
+      .optional()
+      .describe('Position in the preset; defaults to the order given'),
+    superset_group: z.coerce
+      .number()
+      .int()
+      .nullable()
+      .optional()
+      .describe(
+        'Exercises sharing the same integer are performed as a superset; null/omitted means no superset'
+      ),
+    sets: z
+      .array(presetSetSchema)
+      .optional()
+      .describe('The prescription for this exercise, set by set'),
+  })
+  .strict();
+
+// Nested arrays reach us as JSON strings when the model serialises them; the
+// handler parses the string form. Mirrors `sets` on log_exercise.
+// The array form, exported so the handler can re-validate the JSON-string form
+// after parsing it. Without this the string path is a hole: zod checks that
+// `exercises` is a string, and nothing checks what the string decodes to.
+export const presetExerciseArraySchema = z.array(presetExerciseSchema);
+
+const presetExercisesSchema = z
+  .union([z.array(presetExerciseSchema), z.string()])
+  .describe('Exercises as an array of objects or a JSON string');
+
 const createWorkoutPresetSchema = z
   .object({
     action: z.literal('create_workout_preset'),
     name: z.string().min(1).max(200).describe('Name of the workout preset'),
+    description: z
+      .string()
+      .max(1000)
+      .optional()
+      .describe('Description of the preset'),
+    is_public: z.boolean().optional().describe('Share the preset publicly'),
+    exercises: presetExercisesSchema.optional(),
     exercise_ids: z
       .array(uuidSchema)
-      .describe('List of exercise UUIDs to include in the preset'),
+      .optional()
+      .describe(
+        'Shorthand for a preset with no prescription: exercise UUIDs in order. Use `exercises` to specify sets'
+      ),
+  })
+  .strict();
+
+const updateWorkoutPresetSchema = z
+  .object({
+    action: z.literal('update_workout_preset'),
+    preset_id: presetIdSchema.optional().describe('ID of the preset to update'),
+    preset_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('Name of the preset to update (alternative to ID)'),
+    name: z.string().min(1).max(200).optional().describe('New name'),
+    description: z.string().max(1000).optional().describe('New description'),
+    is_public: z.boolean().optional().describe('Share the preset publicly'),
+    exercises: presetExercisesSchema
+      .optional()
+      .describe(
+        'Replaces every exercise and set in the preset. Omit to leave them untouched'
+      ),
+  })
+  .strict();
+
+const deleteWorkoutPresetSchema = z
+  .object({
+    action: z.literal('delete_workout_preset'),
+    preset_id: presetIdSchema.optional().describe('ID of the preset to delete'),
+    preset_name: z
+      .string()
+      .min(1)
+      .max(200)
+      .optional()
+      .describe('Name of the preset to delete (alternative to ID)'),
   })
   .strict();
 
@@ -262,6 +402,8 @@ export const manageExerciseSchema = z.discriminatedUnion('action', [
   deleteExerciseEntrySchema,
   getExerciseDetailsSchema,
   createWorkoutPresetSchema,
+  updateWorkoutPresetSchema,
+  deleteWorkoutPresetSchema,
   getExerciseProgressSchema,
 ]);
 
@@ -283,6 +425,8 @@ export const manageExerciseInput = z.object({
       'delete_exercise_entry',
       'get_exercise_details',
       'create_workout_preset',
+      'update_workout_preset',
+      'delete_workout_preset',
       'get_exercise_progress',
     ])
     .optional()
@@ -306,13 +450,17 @@ export const manageExerciseInput = z.object({
   exercise_ids: z
     .array(uuidSchema)
     .optional()
-    .describe('List of exercise UUIDs — for create_workout_preset'),
+    .describe(
+      'Exercise UUIDs — create_workout_preset shorthand for a preset with no sets'
+    ),
   name: z
     .string()
     .min(1)
     .max(200)
     .optional()
-    .describe('Name — for create_exercise / create_workout_preset'),
+    .describe(
+      'Name — for create_exercise / create_workout_preset / update_workout_preset'
+    ),
   // search
   searchTerm: z
     .string()
@@ -396,7 +544,7 @@ export const manageExerciseInput = z.object({
         z.object({
           reps: z.coerce.number().int().min(0).optional(),
           weight: z.coerce.number().min(0).optional(),
-          duration: z.coerce.number().min(0).optional(),
+          duration_seconds: z.coerce.number().min(0).optional(),
           rest_time: z.coerce.number().min(0).optional(),
           set_type: setTypeEnum.optional(),
           rpe: z.coerce.number().min(0).max(10).optional(),
@@ -407,16 +555,51 @@ export const manageExerciseInput = z.object({
     ])
     .optional()
     .describe(
-      'Set details as array of objects or JSON string; per-set fields include rpe and notes'
+      'Set details as array of objects or JSON string; per-set fields include rpe and notes. weight is kg; duration_seconds and rest_time are SECONDS'
     ),
   // presets
-  preset_id: uuidSchema.optional().describe('Workout preset UUID'),
+  preset_id: presetIdSchema
+    .optional()
+    .describe('Workout preset ID (an integer, not a UUID)'),
   preset_name: z
     .string()
     .min(1)
     .max(200)
     .optional()
     .describe('Workout preset name'),
+  is_public: z
+    .boolean()
+    .optional()
+    .describe('Share the preset publicly — for create/update_workout_preset'),
+  exercises: z
+    .union([
+      z.array(
+        z.object({
+          exercise_id: z.string().min(1).optional(),
+          exercise_name: z.string().min(1).max(200).optional(),
+          sort_order: z.coerce.number().int().min(0).optional(),
+          superset_group: z.coerce.number().int().nullable().optional(),
+          sets: z
+            .array(
+              z.object({
+                set_number: z.coerce.number().int().positive().optional(),
+                set_type: setTypeEnum.optional(),
+                reps: z.coerce.number().int().min(0).optional(),
+                weight: z.coerce.number().min(0).optional(),
+                duration_seconds: z.coerce.number().min(0).optional(),
+                rest_time: z.coerce.number().min(0).optional(),
+                notes: z.string().max(1000).optional(),
+              })
+            )
+            .optional(),
+        })
+      ),
+      z.string(),
+    ])
+    .optional()
+    .describe(
+      'Full preset prescription — for create/update_workout_preset. Array of objects or JSON string: [{exercise_id?|exercise_name?, sort_order?, superset_group?, sets?:[{set_number?,set_type?,reps?,weight?,duration_seconds?,rest_time?,notes?}]}]. weight is kg; duration_seconds and rest_time are SECONDS. Exercises sharing a superset_group integer are supersetted'
+    ),
   // entry management
   entry_id: uuidSchema
     .optional()

@@ -55,9 +55,32 @@ export const mealTypeEnum = z
   .enum(['breakfast', 'lunch', 'dinner', 'snacks'])
   .describe('Meal type category');
 
+// The web UI's canonical vocabulary (SparkyFitnessFrontend/src/constants/
+// excerciseWorkoutSetTypes.ts). set_type is free-text in the DB, so a value
+// outside this list saves happily and then renders as an unknown badge — which
+// is what the AI tools were doing: they emitted 'Warmup', which is not the UI's
+// 'Warm-up', and could not emit AMRAP at all.
+//
+// 'Warmup' stays accepted so existing callers don't break; normalizeSetType()
+// in exerciseTools maps it to the spelling the UI knows.
+export const SET_TYPES = [
+  'Normal',
+  'Working Set',
+  'Warm-up',
+  'Drop Set',
+  'Failure',
+  'AMRAP',
+  'Back-off',
+  'Rest-Pause',
+  'Cluster',
+  'Technique',
+] as const;
+
 export const setTypeEnum = z
-  .enum(['Working Set', 'Warmup', 'Drop Set', 'Failure'])
-  .describe('Type of exercise set');
+  .enum([...SET_TYPES, 'Warmup'])
+  .describe(
+    'Type of exercise set. AMRAP = as many reps as possible for that set.'
+  );
 
 export const fastingStatusEnum = z
   .enum(['ACTIVE', 'COMPLETED', 'CANCELLED'])
@@ -92,6 +115,14 @@ export const uuidSchema = z
   .string()
   .uuid('Must be a valid UUID')
   .describe('UUID identifier');
+
+// workout_presets.id is SERIAL, not a UUID. Coerced because the models hand the
+// id straight back as the string they read it as.
+export const presetIdSchema = z.coerce
+  .number()
+  .int()
+  .positive()
+  .describe('Workout preset ID (an integer, not a UUID)');
 
 // Optional date with today default
 export const optionalDateSchema = z

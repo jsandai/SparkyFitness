@@ -117,6 +117,12 @@ async function deleteWorkoutPreset(userId: any, presetId: any) {
   }
   return { message: 'Workout preset deleted successfully.' };
 }
+// Name lookup, so callers don't reach past the service into the repository.
+// RLS gates visibility, exactly as it does for getWorkoutPresetById.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function getWorkoutPresetByName(userId: any, name: any) {
+  return workoutPresetRepository.getWorkoutPresetByName(userId, name);
+}
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function searchWorkoutPresets(searchTerm: any, userId: any, limit: any) {
   if (limit === null || limit === undefined) {
@@ -132,6 +138,7 @@ async function searchWorkoutPresets(searchTerm: any, userId: any, limit: any) {
 export { createWorkoutPreset };
 export { getWorkoutPresets };
 export { getWorkoutPresetById };
+export { getWorkoutPresetByName };
 export { updateWorkoutPreset };
 export { deleteWorkoutPreset };
 export { searchWorkoutPresets };
@@ -139,6 +146,7 @@ export default {
   createWorkoutPreset,
   getWorkoutPresets,
   getWorkoutPresetById,
+  getWorkoutPresetByName,
   updateWorkoutPreset,
   deleteWorkoutPreset,
   searchWorkoutPresets,
