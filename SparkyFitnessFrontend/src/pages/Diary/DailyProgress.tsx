@@ -140,6 +140,10 @@ const DailyProgress = ({ selectedDate }: { selectedDate: string }) => {
 
   const goalCalories = calorieBalance.goal;
   const eatenCalories = calorieBalance.eaten;
+  // `eaten` now includes logged supplement doses, which have no row in the food list
+  // below. Without saying so, the headline would not reconcile against what the user can
+  // see, which reads as a bug rather than as nutrition they logged elsewhere.
+  const supplementCalories = summaryData.supplementTotals?.calories ?? 0;
 
   const otherExerciseCalories = exerciseData?.otherCalories || 0;
   const activeCaloriesFromExercise = exerciseData?.activeCalories || 0;
@@ -332,6 +336,19 @@ const DailyProgress = ({ selectedDate }: { selectedDate: string }) => {
                 {t('exercise.dailyProgress.eaten', 'eaten')}{' '}
                 {getEnergyUnitString(energyUnit)}
               </div>
+              {supplementCalories > 0 && (
+                <div className="text-xs text-muted-foreground">
+                  {t(
+                    'exercise.dailyProgress.inclSupplements',
+                    'incl. {{amount}} from supplements',
+                    {
+                      amount: Math.round(
+                        convertEnergy(supplementCalories, 'kcal', energyUnit)
+                      ),
+                    }
+                  )}
+                </div>
+              )}
             </div>
 
             {/* Burned (with Tooltip) */}
