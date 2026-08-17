@@ -1,5 +1,6 @@
 import goalPresetRepository from '../models/goalPresetRepository.js';
 import { log } from '../config/logging.js';
+import { macroGramsFromPercentages } from '@workspace/shared';
 // Convert water_goal_ml to the correct repository field name
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function mapWaterGoalMlToDb(presetData: any) {
@@ -19,26 +20,6 @@ function mapDbToWaterGoalMl(presetData: any) {
     water_goal_ml: water_goal,
   };
 }
-// Helper function to calculate grams from percentages
-function calculateGramsFromPercentages(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  calories: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  protein_percentage: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  carbs_percentage: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  fat_percentage: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  dietary_fiber?: any
-) {
-  const fiber = Number(dietary_fiber) || 0;
-  const adjustedCalories = Math.max(0, (Number(calories) || 0) - fiber * 2);
-  const protein_grams = (adjustedCalories * (protein_percentage / 100)) / 4;
-  const carbs_grams = (adjustedCalories * (carbs_percentage / 100)) / 4;
-  const fat_grams = (adjustedCalories * (fat_percentage / 100)) / 9;
-  return { protein_grams, carbs_grams, fat_grams };
-}
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function createGoalPreset(userId: any, presetData: any) {
   try {
@@ -55,7 +36,7 @@ async function createGoalPreset(userId: any, presetData: any) {
       presetData.fat_percentage !== undefined
     ) {
       const { protein_grams, carbs_grams, fat_grams } =
-        calculateGramsFromPercentages(
+        macroGramsFromPercentages(
           presetData.calories,
           presetData.protein_percentage,
           presetData.carbs_percentage,
@@ -123,7 +104,7 @@ async function updateGoalPreset(presetId: any, userId: any, presetData: any) {
       presetData.fat_percentage !== undefined
     ) {
       const { protein_grams, carbs_grams, fat_grams } =
-        calculateGramsFromPercentages(
+        macroGramsFromPercentages(
           presetData.calories,
           presetData.protein_percentage,
           presetData.carbs_percentage,

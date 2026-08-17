@@ -9,6 +9,7 @@ import { NUTRIENT_CONFIG } from '@/constants/goals';
 import { NutrientInput } from './NutrientInput';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import { useTranslation } from 'react-i18next';
+import { macroGramsForNutrient } from '@workspace/shared';
 import { useSaveGoalsMutation } from '@/hooks/Goals/useGoals';
 import { useAuth } from '@/hooks/useAuth';
 import { useCallback, useMemo, useState } from 'react';
@@ -21,17 +22,6 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { useNutrientAutoCalculate } from '@/hooks/Goals/useNutrientAutoCalculate';
 import { NutrientAutoCalculate } from './NutrientAutoCalculate';
 import { AutoCalculateToolbar } from './AutoCalculateToolbar';
-
-const calculateGrams = (
-  calories: number,
-  percentage: number,
-  nutrient: 'protein' | 'carbs' | 'fat',
-  dietaryFiber: number = 0
-) => {
-  const factor = nutrient === 'fat' ? 9 : 4;
-  const adjustedCalories = Math.max(0, calories - dietaryFiber * 2);
-  return Math.round((adjustedCalories * (percentage / 100)) / factor);
-};
 
 interface DailyGoalsProps {
   goals: ExpandedGoals;
@@ -118,17 +108,23 @@ export const DailyGoals = ({
     if (!user) return;
     const finalGoals = { ...goals };
     if (macroInputType === 'percentages') {
-      const cal = finalGoals.calories;
-      const fiber = finalGoals.dietary_fiber || 0;
-      const adjustedCal = Math.max(0, cal - fiber * 2);
-      finalGoals.protein = Math.round(
-        (adjustedCal * (finalGoals.protein_percentage || 0)) / 100 / 4
+      finalGoals.protein = macroGramsForNutrient(
+        finalGoals.calories,
+        finalGoals.protein_percentage || 0,
+        'protein',
+        finalGoals.dietary_fiber
       );
-      finalGoals.carbs = Math.round(
-        (adjustedCal * (finalGoals.carbs_percentage || 0)) / 100 / 4
+      finalGoals.carbs = macroGramsForNutrient(
+        finalGoals.calories,
+        finalGoals.carbs_percentage || 0,
+        'carbs',
+        finalGoals.dietary_fiber
       );
-      finalGoals.fat = Math.round(
-        (adjustedCal * (finalGoals.fat_percentage || 0)) / 100 / 9
+      finalGoals.fat = macroGramsForNutrient(
+        finalGoals.calories,
+        finalGoals.fat_percentage || 0,
+        'fat',
+        finalGoals.dietary_fiber
       );
     } else {
       finalGoals.protein_percentage = null;
@@ -263,7 +259,7 @@ export const DailyGoals = ({
               <div className="p-3 bg-muted/50 rounded-md text-xs text-muted-foreground grid grid-cols-3 gap-2">
                 <span>
                   Protein:{' '}
-                  {calculateGrams(
+                  {macroGramsForNutrient(
                     goals.calories,
                     goals.protein_percentage || 0,
                     'protein',
@@ -273,7 +269,7 @@ export const DailyGoals = ({
                 </span>
                 <span>
                   Carbs:{' '}
-                  {calculateGrams(
+                  {macroGramsForNutrient(
                     goals.calories,
                     goals.carbs_percentage || 0,
                     'carbs',
@@ -283,7 +279,7 @@ export const DailyGoals = ({
                 </span>
                 <span>
                   Fat:{' '}
-                  {calculateGrams(
+                  {macroGramsForNutrient(
                     goals.calories,
                     goals.fat_percentage || 0,
                     'fat',

@@ -12,6 +12,7 @@ import {
   computeCalorieTarget,
   goalModeFromPrimaryGoal,
   calculateAge,
+  macroGramsForNutrient,
 } from '@workspace/shared';
 import { getMealPercentage } from './goals';
 import { ExpandedGoals } from '@/types/goals';
@@ -672,18 +673,29 @@ export const calculateBasePlan = (
         }
       : getDietTemplate(localSelectedDiet);
 
+  // Onboarding has no logged fiber to work from, so it estimates one at
+  // 14 g per 1000 kcal. That estimate is deliberately local: everywhere else
+  // fiber is a real user goal. Only the split below is shared.
   const fiberGrams = Math.round((finalDailyCalories / 1000) * 14);
-  const adjustedCalories = Math.max(0, finalDailyCalories - fiberGrams * 2);
 
   const macros = {
-    carbs: Math.round(
-      (adjustedCalories * ((dietTemplate?.carbsPercentage ?? 0) / 100)) / 4
+    carbs: macroGramsForNutrient(
+      finalDailyCalories,
+      dietTemplate?.carbsPercentage ?? 0,
+      'carbs',
+      fiberGrams
     ),
-    protein: Math.round(
-      (adjustedCalories * ((dietTemplate?.proteinPercentage ?? 0) / 100)) / 4
+    protein: macroGramsForNutrient(
+      finalDailyCalories,
+      dietTemplate?.proteinPercentage ?? 0,
+      'protein',
+      fiberGrams
     ),
-    fat: Math.round(
-      (adjustedCalories * ((dietTemplate?.fatPercentage ?? 0) / 100)) / 9
+    fat: macroGramsForNutrient(
+      finalDailyCalories,
+      dietTemplate?.fatPercentage ?? 0,
+      'fat',
+      fiberGrams
     ),
     fiber: fiberGrams,
   };
