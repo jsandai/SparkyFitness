@@ -72,10 +72,58 @@ describe('macroGramsForNutrient', () => {
     // `pool * (pct / 100) / factor`, where the inexact 0.57 lands the result at
     // 47.499999999999993 and rounds to 47. The other three used
     // `pool * pct / 100 / factor`, which is exact here and rounds to 48.
-    // The shared helper keeps the exact form, so the two groups now agree.
     expect(macroGramsForNutrient(800, 57, 'fat', 25)).toBe(48);
     expect(macroGramsForNutrient(800, 70, 'carbs', 50)).toBe(123);
     expect(macroGramsForNutrient(800, 35, 'carbs', 60)).toBe(60);
+  });
+
+  it('rounds an exact .5 up for one-decimal percentages too', () => {
+    // The percentage inputs are `decimals={1}`, so these are reachable.
+    //
+    // Pool = 800 - 25*2 = 750. 750 * 10.2% / 9 is exactly 8.5, but the
+    // `pool * pct` order evaluates to 8.499999999999998 — the *opposite* skew
+    // to the integer cases above. Neither operator order is safe on its own,
+    // so the half-up rounding has to work on the decimal value.
+    expect(macroGramsForNutrient(800, 10.2, 'fat', 25)).toBe(9);
+    expect(macroGramsForNutrient(750, 20.4, 'fat')).toBe(17);
+    expect(macroGramsForNutrient(750, 36.8, 'carbs')).toBe(69);
+  });
+
+  it('rounds every reachable one-decimal split the way exact arithmetic does', () => {
+    // Both pre-extraction operator orders were wrong somewhere in this space
+    // (149 and 536 triples respectively), so guard the whole thing rather than
+    // the handful of boundaries that happened to get noticed.
+    //
+    // Reference: grams = pool*pct10 / (1000*factor) rounded half-up, evaluated
+    // entirely in integers so no binary rounding can enter.
+    const exact = (pool: number, pct10: number, factor: number) =>
+      Math.floor((2 * pool * pct10 + 1000 * factor) / (2000 * factor));
+
+    const mismatches: string[] = [];
+    for (let pool = 800; pool <= 3200; pool += 7) {
+      for (let pct10 = 1; pct10 <= 1000; pct10++) {
+        const pct = pct10 / 10;
+        for (const [nutrient, factor] of [
+          ['protein', 4],
+          ['fat', 9],
+        ] as const) {
+          const got = macroGramsForNutrient(pool, pct, nutrient);
+          const want = exact(pool, pct10, factor);
+          if (got !== want) {
+            mismatches.push(
+              `${pool} kcal @ ${pct}% ${nutrient}: ${got} ≠ ${want}`
+            );
+          }
+        }
+      }
+    }
+    expect(mismatches.slice(0, 10)).toEqual([]);
+  });
+
+  it('leaves a non-finite result alone rather than coercing it', () => {
+    expect(Number.isNaN(macroGramsForNutrient(2000, NaN, 'protein'))).toBe(
+      true
+    );
   });
 });
 

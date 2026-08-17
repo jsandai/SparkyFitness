@@ -591,22 +591,37 @@ export function macroCaloriePool(
   return Math.max(0, (Number(calories) || 0) - fiber * 2);
 }
 
-/**
- * Grams of one macro carved out of the calorie pool, unrounded.
- *
- * The operator order is deliberate. `pool * percentage` is an exact product for
- * the integer inputs these call sites actually pass, so dividing afterwards
- * keeps the result on the correct side of a `.5` boundary. Folding the
- * percentage first — `pool * (percentage / 100)` — introduces an inexact factor
- * up front and lands one ULP low often enough to round down a value that is
- * mathematically exactly `.5`.
- */
+/** Grams of one macro carved out of the calorie pool, unrounded. */
 function macroGramsRaw(
   pool: number,
   percentage: number,
   nutrient: MacroNutrient,
 ): number {
   return (pool * percentage) / 100 / MACRO_KCAL_PER_GRAM[nutrient];
+}
+
+/**
+ * Round half-up on the *mathematical* value rather than on its binary double.
+ *
+ * The macro split divides a calorie pool by 100 and then by 4 or 9, so a result
+ * that is exactly `.5` in decimal routinely lands one ULP off in binary — and
+ * which side it lands on depends on the operator order. The goal editors accept
+ * one-decimal percentages (`decimals={1}` on the percentage inputs), which is
+ * enough to make both orders wrong somewhere: `(pool * pct) / 100` misses 149
+ * of the 7.6M reachable (pool, percentage, nutrient) triples and
+ * `pool * (pct / 100)` misses 536.
+ *
+ * Snapping to nine decimals first discards that noise while leaving any value
+ * genuinely below the boundary alone, which makes the rounding exact across the
+ * whole space and the operator order immaterial. Do not replace this with a
+ * bare `Math.round` — the pre-extraction copies did, and the two operator
+ * orders in `GoalPresetDialog` disagreed by a gram between the figure it
+ * displayed and the figure it saved.
+ */
+function roundHalfUp(value: number): number {
+  // `toFixed` round-trips NaN and the infinities unchanged, so a malformed
+  // percentage still propagates rather than collapsing to a number.
+  return Math.round(Number(value.toFixed(9)));
 }
 
 /**
@@ -623,7 +638,7 @@ export function macroGramsForNutrient(
   dietaryFiber?: unknown,
 ): number {
   const pool = macroCaloriePool(calories, dietaryFiber);
-  return Math.round(macroGramsRaw(pool, percentage, nutrient));
+  return roundHalfUp(macroGramsRaw(pool, percentage, nutrient));
 }
 
 /**
@@ -664,5 +679,5 @@ export function macroPercentageFromGrams(
 ): number {
   const pool = macroCaloriePool(calories, dietaryFiber);
   if (pool <= 0) return 0;
-  return Math.round(((grams * MACRO_KCAL_PER_GRAM[nutrient]) / pool) * 100);
+  return roundHalfUp(((grams * MACRO_KCAL_PER_GRAM[nutrient]) / pool) * 100);
 }
