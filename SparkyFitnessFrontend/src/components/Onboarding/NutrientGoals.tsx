@@ -4,6 +4,7 @@ import {
   convertMlToSelectedUnit,
   convertSelectedUnitToMl,
 } from '@/utils/nutritionCalculations';
+import { macroPercentageFromGrams } from '@workspace/shared';
 import { useTranslation } from 'react-i18next';
 import { useCustomNutrients } from '@/hooks/Foods/useCustomNutrients';
 import { ExpandedGoals } from '@/types/goals';
@@ -59,18 +60,16 @@ export const NutrientGoals = ({
               <TableCell className="font-medium text-muted-foreground text-sm">
                 Carbohydrates (
                 {editedPlan?.calories
-                  ? (() => {
-                      const adjusted =
-                        convertEnergy(
-                          editedPlan.calories,
-                          localEnergyUnit,
-                          'kcal'
-                        ) -
-                        (editedPlan.dietary_fiber || 0) * 2;
-                      return adjusted > 0
-                        ? Math.round(((editedPlan.carbs * 4) / adjusted) * 100)
-                        : 0;
-                    })()
+                  ? macroPercentageFromGrams(
+                      convertEnergy(
+                        editedPlan.calories,
+                        localEnergyUnit,
+                        'kcal'
+                      ),
+                      editedPlan.carbs,
+                      'carbs',
+                      editedPlan.dietary_fiber
+                    )
                   : 0}
                 %)
               </TableCell>
@@ -95,20 +94,16 @@ export const NutrientGoals = ({
               <TableCell className="font-medium text-muted-foreground text-sm">
                 Protein (
                 {editedPlan?.calories
-                  ? (() => {
-                      const adjusted =
-                        convertEnergy(
-                          editedPlan.calories,
-                          localEnergyUnit,
-                          'kcal'
-                        ) -
-                        (editedPlan.dietary_fiber || 0) * 2;
-                      return adjusted > 0
-                        ? Math.round(
-                            ((editedPlan.protein * 4) / adjusted) * 100
-                          )
-                        : 0;
-                    })()
+                  ? macroPercentageFromGrams(
+                      convertEnergy(
+                        editedPlan.calories,
+                        localEnergyUnit,
+                        'kcal'
+                      ),
+                      editedPlan.protein,
+                      'protein',
+                      editedPlan.dietary_fiber
+                    )
                   : 0}
                 %)
               </TableCell>
@@ -135,18 +130,16 @@ export const NutrientGoals = ({
               <TableCell className="font-medium text-muted-foreground text-sm">
                 Fats (
                 {editedPlan?.calories
-                  ? (() => {
-                      const adjusted =
-                        convertEnergy(
-                          editedPlan.calories,
-                          localEnergyUnit,
-                          'kcal'
-                        ) -
-                        (editedPlan.dietary_fiber || 0) * 2;
-                      return adjusted > 0
-                        ? Math.round(((editedPlan.fat * 9) / adjusted) * 100)
-                        : 0;
-                    })()
+                  ? macroPercentageFromGrams(
+                      convertEnergy(
+                        editedPlan.calories,
+                        localEnergyUnit,
+                        'kcal'
+                      ),
+                      editedPlan.fat,
+                      'fat',
+                      editedPlan.dietary_fiber
+                    )
                   : 0}
                 %)
               </TableCell>
