@@ -1784,7 +1784,12 @@ describe('dispatchAiRequest — learned temperature rejection', () => {
     expect(bodyOf(second, 0)).not.toHaveProperty('temperature');
   });
 
-  it('scopes what it learned to the service_type that taught it', async () => {
+  // Every user-defined backend shares the service_type 'custom' or
+  // 'openai_compatible', and generic model aliases ('default', 'gpt-4') are
+  // common, so the key has to identify the endpoint. Otherwise one user's proxy
+  // rejecting an alias would strip temperature from every other backend that
+  // happens to use the same alias.
+  it('scopes what it learned to the endpoint that taught it, not just the service_type', async () => {
     mockSequence(
       { status: 400, text: TEMPERATURE_400 },
       { status: 200, text: '', json: openAiBody(JSON.stringify(SAMPLE)) }
@@ -1793,14 +1798,32 @@ describe('dispatchAiRequest — learned temperature rejection', () => {
       baseRequest({
         provider: makeProvider({
           service_type: 'custom',
-          model_name: 'shared-alias',
+          model_name: 'default',
           custom_url: 'https://foundry.example.com/chat/completions',
         }),
         temperature: 0,
       })
     );
 
-    const other = mockSequence({
+    // Same service_type, same model alias, different backend: must be unaffected.
+    const sameTypeOtherUrl = mockSequence({
+      status: 200,
+      text: '',
+      json: openAiBody(JSON.stringify(SAMPLE)),
+    });
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'custom',
+          model_name: 'default',
+          custom_url: 'https://vllm.example.com/v1/chat/completions',
+        }),
+        temperature: 0,
+      })
+    );
+    expect(bodyOf(sameTypeOtherUrl, 0).temperature).toBe(0);
+
+    const otherType = mockSequence({
       status: 200,
       text: '',
       json: openAiBody(JSON.stringify(SAMPLE)),
@@ -1809,13 +1832,48 @@ describe('dispatchAiRequest — learned temperature rejection', () => {
       baseRequest({
         provider: makeProvider({
           service_type: 'openai_compatible',
-          model_name: 'shared-alias',
+          model_name: 'default',
           custom_url: 'https://other.example.com/v1',
         }),
         temperature: 0,
       })
     );
-    expect(bodyOf(other, 0).temperature).toBe(0);
+    expect(bodyOf(otherType, 0).temperature).toBe(0);
+  });
+
+  it('treats a trailing-slash / case variant of the same URL as the same endpoint', async () => {
+    mockSequence(
+      { status: 400, text: TEMPERATURE_400 },
+      { status: 200, text: '', json: openAiBody(JSON.stringify(SAMPLE)) }
+    );
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'custom',
+          model_name: 'default',
+          custom_url: 'https://Foundry.Example.com/v1/',
+        }),
+        temperature: 0,
+      })
+    );
+
+    const again = mockSequence({
+      status: 200,
+      text: '',
+      json: openAiBody(JSON.stringify(SAMPLE)),
+    });
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'custom',
+          model_name: 'default',
+          custom_url: 'https://foundry.example.com/v1',
+        }),
+        temperature: 0,
+      })
+    );
+    expect(again).toHaveBeenCalledTimes(1);
+    expect(bodyOf(again, 0)).not.toHaveProperty('temperature');
   });
 
   it('does not retry a 400 that is not about temperature', async () => {

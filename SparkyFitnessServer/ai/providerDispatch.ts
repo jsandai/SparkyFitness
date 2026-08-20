@@ -135,28 +135,47 @@ function normalizeModelName(model: string): string {
 // Models the static list above cannot know about — Azure deployment names,
 // gateway aliases, models released after this build — are learned from the
 // provider's own 400 (see isTemperatureRejection), so the wasted round trip
-// happens at most once per provider+model per process. Keyed by service_type so
-// one broken proxy cannot suppress `temperature` for a different provider.
+// happens at most once per endpoint+model per process.
+//
+// The key must identify the *endpoint*, not just the service_type: every
+// user-defined backend shares the value 'custom' or 'openai_compatible', so
+// keying on the type alone would let one user's proxy rejecting a generic alias
+// like 'default' silently strip temperature from every other custom backend
+// using that same alias — including ones that support it.
 const LEARNED_TEMPERATURE_REJECTIONS = new Set<string>();
-// The key embeds a user-supplied model name, so bound the set rather than let a
-// caller grow it without limit. Configured providers number in the dozens; the
-// cap is only reached by pathological input, and clearing merely re-learns.
+// The key embeds a user-supplied model name and URL, so bound the set rather
+// than let a caller grow it without limit. Configured providers number in the
+// dozens; the cap is only reached by pathological input, and clearing merely
+// re-learns.
 const MAX_LEARNED_TEMPERATURE_REJECTIONS = 500;
 
-function temperatureKey(serviceType: string, model: string): string {
-  return `${serviceType}|${normalizeModelName(model)}`;
+function temperatureKey(
+  serviceType: string,
+  model: string,
+  customUrl?: string | null
+): string {
+  const endpoint = (customUrl ?? '').trim().toLowerCase().replace(/\/+$/, '');
+  return `${serviceType}|${endpoint}|${normalizeModelName(model)}`;
 }
 
 /**
  * Whether `temperature` may be sent to this provider+model. Exported because
  * the chat path builds its requests through the AI SDK rather than through
  * `buildRequest`, and must make the same decision.
+ *
+ * `customUrl` distinguishes the user-supplied backends, which all share one
+ * service_type; pass it whenever the provider config has one.
  */
 export function modelAcceptsTemperature(
   serviceType: string,
-  model: string
+  model: string,
+  customUrl?: string | null
 ): boolean {
-  if (LEARNED_TEMPERATURE_REJECTIONS.has(temperatureKey(serviceType, model))) {
+  if (
+    LEARNED_TEMPERATURE_REJECTIONS.has(
+      temperatureKey(serviceType, model, customUrl)
+    )
+  ) {
     return false;
   }
   const normalized = normalizeModelName(model);
@@ -167,14 +186,17 @@ export function modelAcceptsTemperature(
 
 function rememberTemperatureRejection(
   serviceType: string,
-  model: string
+  model: string,
+  customUrl?: string | null
 ): void {
   if (
     LEARNED_TEMPERATURE_REJECTIONS.size >= MAX_LEARNED_TEMPERATURE_REJECTIONS
   ) {
     LEARNED_TEMPERATURE_REJECTIONS.clear();
   }
-  LEARNED_TEMPERATURE_REJECTIONS.add(temperatureKey(serviceType, model));
+  LEARNED_TEMPERATURE_REJECTIONS.add(
+    temperatureKey(serviceType, model, customUrl)
+  );
 }
 
 // Exported for tests: process-level learning would otherwise leak between cases.
@@ -1196,7 +1218,11 @@ export async function dispatchAiRequest(
       images,
       jsonSchema,
       toolName,
-      temperature: modelAcceptsTemperature(serviceType, model)
+      temperature: modelAcceptsTemperature(
+        serviceType,
+        model,
+        provider.custom_url
+      )
         ? req.temperature
         : undefined,
     },
@@ -1222,7 +1248,7 @@ export async function dispatchAiRequest(
     isTemperatureRejection(outcome.rawBody) &&
     stripTemperature(built, family)
   ) {
-    rememberTemperatureRejection(serviceType, model);
+    rememberTemperatureRejection(serviceType, model, provider.custom_url);
     log(
       'info',
       `[providerDispatch] ${serviceType}/${model} rejected 'temperature'; retrying without it and omitting it for this model.`

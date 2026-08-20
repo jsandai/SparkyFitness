@@ -1439,11 +1439,19 @@ async function processChatMessage(
       activeTools: activeToolNames,
       prepareStep,
       providerOptions: chatProviderOptions,
-      // Low temperature only for small local models (core profile); cloud and
-      // full-profile Ollama keep provider defaults.
-      ...(toolProfile === 'core' && {
-        temperature: CORE_PROFILE_CHAT_TEMPERATURE,
-      }),
+      // Low temperature only for core-profile backends; cloud and full-profile
+      // Ollama keep provider defaults. The core profile is gated on a
+      // user-supplied URL, not on the model being local, so a GPT-5/o-series
+      // model reached through `custom`/`openai_compatible` lands here too and
+      // would 400 on the temperature.
+      ...(toolProfile === 'core' &&
+        modelAcceptsTemperature(
+          aiService.service_type,
+          modelName,
+          aiService.custom_url
+        ) && {
+          temperature: CORE_PROFILE_CHAT_TEMPERATURE,
+        }),
       // Tighter retry ceiling for cache-less core-profile backends, where every
       // retry re-processes the full prefix.
       stopWhen: buildChatStopConditions(toolProfile),
@@ -1974,11 +1982,19 @@ async function processChatMessageStream(
       activeTools: activeToolNames,
       prepareStep,
       providerOptions: chatProviderOptions,
-      // Low temperature only for small local models (core profile); cloud and
-      // full-profile Ollama keep provider defaults.
-      ...(toolProfile === 'core' && {
-        temperature: CORE_PROFILE_CHAT_TEMPERATURE,
-      }),
+      // Low temperature only for core-profile backends; cloud and full-profile
+      // Ollama keep provider defaults. The core profile is gated on a
+      // user-supplied URL, not on the model being local, so a GPT-5/o-series
+      // model reached through `custom`/`openai_compatible` lands here too and
+      // would 400 on the temperature.
+      ...(toolProfile === 'core' &&
+        modelAcceptsTemperature(
+          aiService.service_type,
+          modelName,
+          aiService.custom_url
+        ) && {
+          temperature: CORE_PROFILE_CHAT_TEMPERATURE,
+        }),
       // Tighter retry ceiling for cache-less core-profile backends, where every
       // retry re-processes the full prefix.
       stopWhen: buildChatStopConditions(toolProfile),
