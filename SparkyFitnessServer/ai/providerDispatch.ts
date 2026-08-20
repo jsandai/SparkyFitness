@@ -134,8 +134,9 @@ function normalizeModelName(model: string): string {
 
 // Models the static list above cannot know about — Azure deployment names,
 // gateway aliases, models released after this build — are learned from the
-// provider's own 400 (see isTemperatureRejection), so the wasted round trip
-// happens at most once per endpoint+model per process.
+// provider's own 400 (see isTemperatureRejection) once a retry without the
+// parameter has actually succeeded, so the wasted round trip happens at most
+// once per endpoint+model per process.
 //
 // The key must identify the *endpoint*, not just the service_type: every
 // user-defined backend shares the value 'custom' or 'openai_compatible', so
@@ -227,18 +228,39 @@ export function __resetLearnedTemperatureRejections(): void {
 //    with this model. Only the default (1) value is supported.",
 //    "type":"invalid_request_error","param":"temperature",
 //    "code":"unsupported_value"}}
-// Gateways reword the message and some drop `param`, so the test is "the 400
-// body names temperature and reads like a rejection" rather than an exact
-// shape. A false positive costs one retry without `temperature`, never a
-// failed request.
-const TEMPERATURE_REJECTION_MARKERS =
-  /unsupported|not supported|does not support|invalid_request|invalid value/;
+// Gateways reword the message and some drop `param`, so the test cannot be an
+// exact shape match. It still has to be narrow: a match strips `temperature`
+// and (once the retry proves it) remembers that for the rest of the process,
+// so a false positive silently disables the parameter on an endpoint that
+// supports it.
+//
+// Two things keep it narrow:
+//   1. `"param":"temperature"` is accepted outright — that field exists to
+//      name the offending parameter, so it is unambiguous.
+//   2. Otherwise the word must sit *next to* a rejection phrase. A generic
+//      400 that merely happens to carry the word does not qualify; in
+//      particular `invalid_request` alone is not a marker, because
+//      `"type":"invalid_request_error"` rides along on every OpenAI 400.
+const TEMPERATURE_PARAM_FIELD = /"param"\s*:\s*"temperature"/;
+
+// `[^.{}]` keeps a match inside one sentence and one JSON object, so a message
+// about some other field cannot reach across a `},{` boundary to a temperature
+// mentioned elsewhere in the body.
+const TEMPERATURE_NEAR_REJECTION =
+  /(?:unsupported|not supported|does not support|invalid value|unrecognized)[^.{}]{0,80}temperature|temperature[^.{}]{0,80}(?:unsupported|not supported|does not support|invalid value|unrecognized|only the default)/;
+
+// Local OpenAI-compatible servers (vLLM, LM Studio, llama.cpp) often echo the
+// offending request back inside the error body, and that echo contains
+// `"temperature": 0`. Drop those assignments before testing for prose: an
+// echoed value is evidence of what we sent, not of what the server objected to.
+const ECHOED_TEMPERATURE_VALUE = /"temperature"\s*:\s*-?\d+(?:\.\d+)?/g;
 
 function isTemperatureRejection(body: string | undefined): boolean {
   if (!body) return false;
   const text = body.toLowerCase();
-  return (
-    text.includes('temperature') && TEMPERATURE_REJECTION_MARKERS.test(text)
+  if (TEMPERATURE_PARAM_FIELD.test(text)) return true;
+  return TEMPERATURE_NEAR_REJECTION.test(
+    text.replace(ECHOED_TEMPERATURE_VALUE, '')
   );
 }
 
@@ -1266,12 +1288,23 @@ export async function dispatchAiRequest(
     isTemperatureRejection(outcome.rawBody) &&
     stripTemperature(built, family)
   ) {
-    rememberTemperatureRejection(serviceType, model, provider.custom_url);
     log(
       'info',
-      `[providerDispatch] ${serviceType}/${model} rejected 'temperature'; retrying without it and omitting it for this model.`
+      `[providerDispatch] ${serviceType}/${model} looks like it rejected 'temperature'; retrying without it.`
     );
     outcome = await send();
+    // Only learn from a rejection the retry actually cured. If the second
+    // request fails too, `temperature` was not the problem — recording it
+    // would strip a supported parameter from every later call to this
+    // endpoint for the life of the process. Not learning costs one extra
+    // round trip next time, which is the safe direction to be wrong in.
+    if (!('error' in outcome)) {
+      rememberTemperatureRejection(serviceType, model, provider.custom_url);
+      log(
+        'info',
+        `[providerDispatch] ${serviceType}/${model} succeeded without 'temperature'; omitting it for this model.`
+      );
+    }
   }
 
   if ('error' in outcome) {

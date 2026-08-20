@@ -1923,6 +1923,96 @@ describe('dispatchAiRequest — learned temperature rejection', () => {
     expect(m).toHaveBeenCalledTimes(1);
   });
 
+  // Local OpenAI-compatible servers (vLLM, LM Studio, llama.cpp) commonly quote
+  // the offending request back inside the error body, so the body contains
+  // `"temperature": 0` while objecting to something else entirely. Matching on
+  // "the body says unsupported somewhere and mentions temperature somewhere"
+  // strips a supported parameter and, worse, would remember doing so.
+  it('does not treat an echoed request temperature as a rejection of it', async () => {
+    const echoed400 = JSON.stringify({
+      error: {
+        message: "Unsupported parameter: 'logprobs' is not supported here.",
+        type: 'invalid_request_error',
+        param: 'logprobs',
+        code: 'unsupported_parameter',
+      },
+      request: { model: 'local-model', temperature: 0, max_tokens: 512 },
+    });
+    const m = mockSequence({ status: 400, text: echoed400 });
+    const result = await dispatchAiRequest(baseRequest({ temperature: 0 }));
+
+    expect(result.ok).toBe(false);
+    expect(m).toHaveBeenCalledTimes(1);
+  });
+
+  // `"type":"invalid_request_error"` rides along on every OpenAI 400, so it
+  // cannot be evidence of anything on its own.
+  it('does not treat a generic invalid_request 400 mentioning temperature as a rejection', async () => {
+    const otherField400 = JSON.stringify({
+      error: {
+        message: "'messages' must contain at least one item.",
+        type: 'invalid_request_error',
+        param: 'messages',
+      },
+      echo: { temperature: 0.7 },
+    });
+    const m = mockSequence({ status: 400, text: otherField400 });
+    const result = await dispatchAiRequest(baseRequest({ temperature: 0 }));
+
+    expect(result.ok).toBe(false);
+    expect(m).toHaveBeenCalledTimes(1);
+  });
+
+  // Gateways reword the message and drop `param`; the retry still has to fire.
+  it('retries on a reworded 400 that names temperature without a param field', async () => {
+    const m = mockSequence(
+      {
+        status: 400,
+        text: JSON.stringify({
+          error: {
+            message: 'temperature is not supported for this deployment',
+            code: 400,
+          },
+        }),
+      },
+      { status: 200, text: '', json: openAiBody(JSON.stringify(SAMPLE)) }
+    );
+    const result = await dispatchAiRequest(baseRequest({ temperature: 0 }));
+
+    expect(result.ok).toBe(true);
+    expect(m).toHaveBeenCalledTimes(2);
+    expect(bodyOf(m, 1)).not.toHaveProperty('temperature');
+  });
+
+  // The retry is the proof. If the request fails again, temperature was not
+  // the problem, and recording it would strip a supported parameter from every
+  // later call to this endpoint for the life of the process.
+  it('does not remember the model when the retry fails too', async () => {
+    const provider = makeProvider({
+      service_type: 'custom',
+      model_name: 'foundry-router',
+      custom_url: 'https://foundry.example.com/chat/completions',
+    });
+
+    mockSequence(
+      { status: 400, text: TEMPERATURE_400 },
+      { status: 400, text: UNRELATED_400 }
+    );
+    await dispatchAiRequest(baseRequest({ provider, temperature: 0 }));
+
+    const second = mockSequence({
+      status: 200,
+      text: '',
+      json: openAiBody(JSON.stringify(SAMPLE)),
+    });
+    const result = await dispatchAiRequest(
+      baseRequest({ provider, temperature: 0 })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(bodyOf(second, 0).temperature).toBe(0);
+  });
+
   it('does not retry when no temperature was sent in the first place', async () => {
     const m = mockSequence({ status: 400, text: TEMPERATURE_400 });
     const result = await dispatchAiRequest(baseRequest());
