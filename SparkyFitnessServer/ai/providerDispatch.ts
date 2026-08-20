@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import undici from 'undici';
 import convert from 'heic-convert';
 import { log } from '../config/logging.js';
@@ -169,12 +170,40 @@ function normalizeEndpoint(customUrl?: string | null): string {
   }
 }
 
+// One gateway URL can front different models per credential: a LiteLLM or
+// Azure-style router maps the alias `default` to whatever the caller's key is
+// entitled to. Without the credential in the key, one tenant learning that
+// `default` rejects temperature would strip it from another tenant whose
+// `default` supports it. Hashed rather than stored: this key is only ever
+// compared, never read back, and must not put an API key in memory a second
+// time (or anywhere it could reach a log line).
+function credentialFingerprint(apiKey?: string | null): string {
+  const raw = (apiKey ?? '').trim();
+  if (!raw) return '';
+  return createHash('sha256').update(raw).digest('hex').slice(0, 16);
+}
+
+/**
+ * The parts of a provider config that identify *which* backend a learned
+ * temperature rejection belongs to. Grouped rather than passed as three more
+ * positional strings, which would be trivial to transpose at a call site.
+ */
+export interface TemperatureProviderIdentity {
+  serviceType: string;
+  customUrl?: string | null;
+  apiKey?: string | null;
+}
+
 function temperatureKey(
-  serviceType: string,
-  model: string,
-  customUrl?: string | null
+  identity: TemperatureProviderIdentity,
+  model: string
 ): string {
-  return `${serviceType}|${normalizeEndpoint(customUrl)}|${normalizeModelName(model)}`;
+  return [
+    identity.serviceType,
+    normalizeEndpoint(identity.customUrl),
+    credentialFingerprint(identity.apiKey),
+    normalizeModelName(model),
+  ].join('|');
 }
 
 /**
@@ -182,19 +211,14 @@ function temperatureKey(
  * the chat path builds its requests through the AI SDK rather than through
  * `buildRequest`, and must make the same decision.
  *
- * `customUrl` distinguishes the user-supplied backends, which all share one
- * service_type; pass it whenever the provider config has one.
+ * Pass the whole identity: `customUrl` and `apiKey` distinguish the
+ * user-supplied backends, which all share one service_type.
  */
 export function modelAcceptsTemperature(
-  serviceType: string,
-  model: string,
-  customUrl?: string | null
+  identity: TemperatureProviderIdentity,
+  model: string
 ): boolean {
-  if (
-    LEARNED_TEMPERATURE_REJECTIONS.has(
-      temperatureKey(serviceType, model, customUrl)
-    )
-  ) {
+  if (LEARNED_TEMPERATURE_REJECTIONS.has(temperatureKey(identity, model))) {
     return false;
   }
   const normalized = normalizeModelName(model);
@@ -204,18 +228,15 @@ export function modelAcceptsTemperature(
 }
 
 function rememberTemperatureRejection(
-  serviceType: string,
-  model: string,
-  customUrl?: string | null
+  identity: TemperatureProviderIdentity,
+  model: string
 ): void {
   if (
     LEARNED_TEMPERATURE_REJECTIONS.size >= MAX_LEARNED_TEMPERATURE_REJECTIONS
   ) {
     LEARNED_TEMPERATURE_REJECTIONS.clear();
   }
-  LEARNED_TEMPERATURE_REJECTIONS.add(
-    temperatureKey(serviceType, model, customUrl)
-  );
+  LEARNED_TEMPERATURE_REJECTIONS.add(temperatureKey(identity, model));
 }
 
 // Exported for tests: process-level learning would otherwise leak between cases.
@@ -1259,6 +1280,12 @@ export async function dispatchAiRequest(
       : getDefaultModel(serviceType));
 
   const toolName = schemaName ?? DEFAULT_SCHEMA_NAME;
+  const temperatureIdentity: TemperatureProviderIdentity = {
+    serviceType,
+    customUrl: provider.custom_url,
+    apiKey: provider.api_key,
+  };
+
   const built = buildRequest(
     family,
     {
@@ -1268,11 +1295,7 @@ export async function dispatchAiRequest(
       images,
       jsonSchema,
       toolName,
-      temperature: modelAcceptsTemperature(
-        serviceType,
-        model,
-        provider.custom_url
-      )
+      temperature: modelAcceptsTemperature(temperatureIdentity, model)
         ? req.temperature
         : undefined,
     },
@@ -1309,7 +1332,7 @@ export async function dispatchAiRequest(
     // endpoint for the life of the process. Not learning costs one extra
     // round trip next time, which is the safe direction to be wrong in.
     if (!('error' in outcome)) {
-      rememberTemperatureRejection(serviceType, model, provider.custom_url);
+      rememberTemperatureRejection(temperatureIdentity, model);
       log(
         'info',
         `[providerDispatch] ${serviceType}/${model} succeeded without 'temperature'; omitting it for this model.`

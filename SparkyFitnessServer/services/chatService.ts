@@ -1221,6 +1221,7 @@ async function classifyUserIntent(
     serviceType: string;
     modelName: string;
     customUrl?: string | null;
+    apiKey?: string | null;
   },
   providerOptions?: Record<string, Record<string, JSONValue>>
 ): Promise<ChatToolCategorySlug[]> {
@@ -1284,9 +1285,12 @@ Your response must contain ONLY the matched domain names as a comma-separated li
       // chat turn that misses the keyword classifier, and tool narrowing
       // quietly falling back to the profile default.
       ...(modelAcceptsTemperature(
-        provider.serviceType,
-        provider.modelName,
-        provider.customUrl
+        {
+          serviceType: provider.serviceType,
+          customUrl: provider.customUrl,
+          apiKey: provider.apiKey,
+        },
+        provider.modelName
       ) && {
         temperature: 0,
       }),
@@ -1395,6 +1399,7 @@ async function processChatMessage(
           serviceType: aiService.service_type,
           modelName,
           customUrl: aiService.custom_url,
+          apiKey: aiService.api_key,
         },
         buildChatProviderOptions(
           aiService.service_type,
@@ -1456,9 +1461,12 @@ async function processChatMessage(
       // would 400 on the temperature.
       ...(toolProfile === 'core' &&
         modelAcceptsTemperature(
-          aiService.service_type,
-          modelName,
-          aiService.custom_url
+          {
+            serviceType: aiService.service_type,
+            customUrl: aiService.custom_url,
+            apiKey: aiService.api_key,
+          },
+          modelName
         ) && {
           temperature: CORE_PROFILE_CHAT_TEMPERATURE,
         }),
@@ -1938,6 +1946,7 @@ async function processChatMessageStream(
           serviceType: aiService.service_type,
           modelName,
           customUrl: aiService.custom_url,
+          apiKey: aiService.api_key,
         },
         buildChatProviderOptions(
           aiService.service_type,
@@ -2002,9 +2011,12 @@ async function processChatMessageStream(
       // would 400 on the temperature.
       ...(toolProfile === 'core' &&
         modelAcceptsTemperature(
-          aiService.service_type,
-          modelName,
-          aiService.custom_url
+          {
+            serviceType: aiService.service_type,
+            customUrl: aiService.custom_url,
+            apiKey: aiService.api_key,
+          },
+          modelName
         ) && {
           temperature: CORE_PROFILE_CHAT_TEMPERATURE,
         }),

@@ -1667,7 +1667,7 @@ describe('modelAcceptsTemperature', () => {
     ['anthropic', 'claude-opus-5'],
     ['openrouter', 'openai/gpt-5'],
   ])('is false for %s / %s', (serviceType, model) => {
-    expect(modelAcceptsTemperature(serviceType, model)).toBe(false);
+    expect(modelAcceptsTemperature({ serviceType }, model)).toBe(false);
   });
 
   it.each([
@@ -1676,7 +1676,7 @@ describe('modelAcceptsTemperature', () => {
     ['ollama', 'llama3.2'],
     ['google', 'gemini-2.5-flash'],
   ])('is true for %s / %s', (serviceType, model) => {
-    expect(modelAcceptsTemperature(serviceType, model)).toBe(true);
+    expect(modelAcceptsTemperature({ serviceType }, model)).toBe(true);
   });
 });
 
@@ -1913,6 +1913,57 @@ describe('dispatchAiRequest — learned temperature rejection', () => {
       })
     );
     expect(bodyOf(otherDeployment, 0).temperature).toBe(0);
+  });
+
+  // One gateway URL fronts different models per credential: a LiteLLM or
+  // Azure-style router maps the alias `default` to whatever the caller's key is
+  // entitled to. Two users on the same instance can therefore share a URL and a
+  // model alias while pointing at different models.
+  it('scopes what it learned to the credential, not just the endpoint', async () => {
+    const gateway = {
+      service_type: 'custom',
+      model_name: 'default',
+      custom_url: 'https://router.example.com/v1/chat/completions',
+    };
+
+    mockSequence(
+      { status: 400, text: TEMPERATURE_400 },
+      { status: 200, text: '', json: openAiBody(JSON.stringify(SAMPLE)) }
+    );
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({ ...gateway, api_key: 'sk-tenant-a' }),
+        temperature: 0,
+      })
+    );
+
+    const otherTenant = mockSequence({
+      status: 200,
+      text: '',
+      json: openAiBody(JSON.stringify(SAMPLE)),
+    });
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({ ...gateway, api_key: 'sk-tenant-b' }),
+        temperature: 0,
+      })
+    );
+    expect(bodyOf(otherTenant, 0).temperature).toBe(0);
+
+    // ...but the tenant that taught it still benefits.
+    const sameTenant = mockSequence({
+      status: 200,
+      text: '',
+      json: openAiBody(JSON.stringify(SAMPLE)),
+    });
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({ ...gateway, api_key: 'sk-tenant-a' }),
+        temperature: 0,
+      })
+    );
+    expect(sameTenant).toHaveBeenCalledTimes(1);
+    expect(bodyOf(sameTenant, 0)).not.toHaveProperty('temperature');
   });
 
   it('does not retry a 400 that is not about temperature', async () => {
