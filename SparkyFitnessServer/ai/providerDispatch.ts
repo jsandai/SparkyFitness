@@ -243,11 +243,21 @@ export function __resetLearnedTemperatureRejections(): void {
 //      `"type":"invalid_request_error"` rides along on every OpenAI 400.
 const TEMPERATURE_PARAM_FIELD = /"param"\s*:\s*"temperature"/;
 
+// The phrase list has to span vendors, because a model outside the static list
+// above can appear on any of them. Anthropic does not use OpenAI's wording or
+// its `param` field; it surfaces schema validation directly:
+//   {"type":"error","error":{"type":"invalid_request_error",
+//    "message":"temperature: Extra inputs are not permitted"}}
+//
 // `[^.{}]` keeps a match inside one sentence and one JSON object, so a message
 // about some other field cannot reach across a `},{` boundary to a temperature
 // mentioned elsewhere in the body.
-const TEMPERATURE_NEAR_REJECTION =
-  /(?:unsupported|not supported|does not support|invalid value|unrecognized)[^.{}]{0,80}temperature|temperature[^.{}]{0,80}(?:unsupported|not supported|does not support|invalid value|unrecognized|only the default)/;
+const REJECTION_PHRASE =
+  'unsupported|not supported|does not support|invalid value|unrecognized|not permitted|unexpected';
+const TEMPERATURE_NEAR_REJECTION = new RegExp(
+  `(?:${REJECTION_PHRASE})[^.{}]{0,80}temperature` +
+    `|temperature[^.{}]{0,80}(?:${REJECTION_PHRASE}|only the default)`
+);
 
 // Local OpenAI-compatible servers (vLLM, LM Studio, llama.cpp) often echo the
 // offending request back inside the error body, and that echo contains

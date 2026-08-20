@@ -1984,6 +1984,41 @@ describe('dispatchAiRequest — learned temperature rejection', () => {
     expect(bodyOf(m, 1)).not.toHaveProperty('temperature');
   });
 
+  // Anthropic neither words the message like OpenAI nor sends a `param` field;
+  // it surfaces schema validation directly. A Claude released after this build
+  // and outside the static model list has only this backstop to fall back on.
+  it('retries on an anthropic-shaped 400 rejecting temperature', async () => {
+    const m = mockSequence(
+      {
+        status: 400,
+        text: JSON.stringify({
+          type: 'error',
+          error: {
+            type: 'invalid_request_error',
+            message: 'temperature: Extra inputs are not permitted',
+          },
+        }),
+      },
+      { status: 200, text: '', json: anthropicToolBody(SAMPLE) }
+    );
+
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'anthropic',
+          api_key: 'sk-ant',
+          model_name: 'claude-opus-9',
+        }),
+        temperature: 0,
+      })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(m).toHaveBeenCalledTimes(2);
+    expect(bodyOf(m, 0).temperature).toBe(0);
+    expect(bodyOf(m, 1)).not.toHaveProperty('temperature');
+  });
+
   // The retry is the proof. If the request fails again, temperature was not
   // the problem, and recording it would strip a supported parameter from every
   // later call to this endpoint for the life of the process.
