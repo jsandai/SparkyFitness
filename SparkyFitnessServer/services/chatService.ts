@@ -5,6 +5,7 @@ import { log } from '../config/logging.js';
 import { getDefaultModel, getOpenAiCompatibleBaseUrl } from '../ai/config.js';
 import {
   dispatchAiRequest,
+  modelAcceptsTemperature,
   requiresApiKey,
   type DispatchErrorCategory,
   type ProviderConfig,
@@ -1216,6 +1217,8 @@ export function classifyByKeywords(text: string): ChatToolCategorySlug[] {
 async function classifyUserIntent(
   messages: ChatMessage[],
   modelInstance: Parameters<typeof generateText>[0]['model'],
+  serviceType: string,
+  modelName: string,
   providerOptions?: Record<string, Record<string, JSONValue>>
 ): Promise<ChatToolCategorySlug[]> {
   const lastUserMessage = [...messages]
@@ -1271,7 +1274,15 @@ Your response must contain ONLY the matched domain names as a comma-separated li
       system: classificationPrompt,
       messages: contextMessages,
       providerOptions,
-      temperature: 0,
+      // Determinism matters here (the output is parsed as a category list), but
+      // reasoning-tier models reject a caller-supplied temperature outright.
+      // This call is inside a try/catch, so on those models an unguarded
+      // `temperature: 0` would fail silently: a wasted round trip on every
+      // chat turn that misses the keyword classifier, and tool narrowing
+      // quietly falling back to the profile default.
+      ...(modelAcceptsTemperature(serviceType, modelName) && {
+        temperature: 0,
+      }),
       maxRetries: 0,
       abortSignal: AbortSignal.timeout(10000), // 10s timeout to prevent hanging the chat turn
     });
@@ -1373,6 +1384,8 @@ async function processChatMessage(
       activeCategories = await classifyUserIntent(
         messages,
         modelInstance,
+        aiService.service_type,
+        modelName,
         buildChatProviderOptions(
           aiService.service_type,
           authenticatedUserId,
@@ -1903,6 +1916,8 @@ async function processChatMessageStream(
       activeCategories = await classifyUserIntent(
         messages,
         modelInstance,
+        aiService.service_type,
+        modelName,
         buildChatProviderOptions(
           aiService.service_type,
           authenticatedUserId,

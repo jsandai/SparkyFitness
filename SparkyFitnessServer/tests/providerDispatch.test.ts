@@ -1,7 +1,9 @@
 import { vi, afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   dispatchAiRequest,
+  modelAcceptsTemperature,
   toStrictJsonSchema,
+  __resetLearnedTemperatureRejections,
   type DispatchRequest,
   type JsonSchemaNode,
   type ProviderConfig,
@@ -1523,7 +1525,7 @@ describe('anthropic max_tokens headroom', () => {
   });
 });
 
-describe('anthropic temperature compatibility', () => {
+describe('reasoning-model temperature compatibility', () => {
   // Claude Opus 4.7+ reject `temperature` with a 400; Sonnet 5 rejects
   // non-default values. Forwarding it fails the request outright.
   it.each(['claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5'])(
@@ -1562,4 +1564,309 @@ describe('anthropic temperature compatibility', () => {
       expect(captured(m).body.temperature).toBe(0.7);
     }
   );
+
+  // GPT-5 and the o-series accept only the default temperature (1); any
+  // caller-supplied value is a 400 before the model does any work. Reported as
+  // "GPT-5.6 is not supported" — the Test button dispatches with temperature 0.
+  it.each([
+    'gpt-5',
+    'gpt-5-mini',
+    'gpt-5.6-sol',
+    'gpt-5.6-luna',
+    'o1',
+    'o1-mini',
+    'o3',
+    'o3-mini',
+    'o4-mini',
+  ])('omits temperature for %s', async (model) => {
+    const m = mockFetch(openAiBody(JSON.stringify(SAMPLE)));
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({ model_name: model }),
+        temperature: 0,
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(captured(m).body).not.toHaveProperty('temperature');
+  });
+
+  // gpt-5-chat-latest is the non-reasoning variant; o200k-base is a tokenizer
+  // name, included to pin that the o-series pattern needs a real boundary.
+  it.each([
+    'gpt-4o',
+    'gpt-4o-mini',
+    'gpt-4.1',
+    'gpt-4.1-mini',
+    'gpt-5-chat-latest',
+    'o200k-base',
+  ])('still sends temperature for %s', async (model) => {
+    const m = mockFetch(openAiBody(JSON.stringify(SAMPLE)));
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({ model_name: model }),
+        temperature: 0,
+      })
+    );
+    expect(captured(m).body.temperature).toBe(0);
+  });
+
+  it('matches case-insensitively, since the model name is typed by hand', async () => {
+    const m = mockFetch(openAiBody(JSON.stringify(SAMPLE)));
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({ model_name: 'GPT-5.6-Sol' }),
+        temperature: 0,
+      })
+    );
+    expect(captured(m).body).not.toHaveProperty('temperature');
+  });
+
+  // Gateways namespace models as `vendor/model` and route every vendor through
+  // one OpenAI-shaped API, so the check must survive the prefix — and must
+  // catch a Claude model arriving through the openai family.
+  it.each(['openai/gpt-5.6-sol', 'anthropic/claude-opus-5'])(
+    'omits temperature for the gateway-namespaced %s',
+    async (model) => {
+      const m = mockFetch(openAiBody(JSON.stringify(SAMPLE)));
+      await dispatchAiRequest(
+        baseRequest({
+          provider: makeProvider({
+            service_type: 'openrouter',
+            model_name: model,
+          }),
+          temperature: 0,
+        })
+      );
+      expect(captured(m).body).not.toHaveProperty('temperature');
+    }
+  );
+
+  it('still sends temperature for a gateway-namespaced non-reasoning model', async () => {
+    const m = mockFetch(openAiBody(JSON.stringify(SAMPLE)));
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'openrouter',
+          model_name: 'google/gemini-2.5-flash',
+        }),
+        temperature: 0.2,
+      })
+    );
+    expect(captured(m).body.temperature).toBe(0.2);
+  });
+});
+
+// The chat path builds its requests through the AI SDK rather than through
+// buildRequest, so it consumes this predicate directly. Its own call site
+// (classifyUserIntent) is skipped under VITEST, so the shared decision is
+// asserted here.
+describe('modelAcceptsTemperature', () => {
+  it.each([
+    ['openai', 'gpt-5.6-sol'],
+    ['openai', 'o3-mini'],
+    ['anthropic', 'claude-opus-5'],
+    ['openrouter', 'openai/gpt-5'],
+  ])('is false for %s / %s', (serviceType, model) => {
+    expect(modelAcceptsTemperature(serviceType, model)).toBe(false);
+  });
+
+  it.each([
+    ['openai', 'gpt-4o-mini'],
+    ['anthropic', 'claude-sonnet-4-6'],
+    ['ollama', 'llama3.2'],
+    ['google', 'gemini-2.5-flash'],
+  ])('is true for %s / %s', (serviceType, model) => {
+    expect(modelAcceptsTemperature(serviceType, model)).toBe(true);
+  });
+});
+
+// The static list above cannot know about Azure deployment names, gateway
+// aliases, or models released after this build. Those announce themselves with
+// a 400 that names the parameter; the dispatcher learns from it.
+describe('dispatchAiRequest — learned temperature rejection', () => {
+  // Verbatim from the provider (issue #2165).
+  const TEMPERATURE_400 = JSON.stringify({
+    error: {
+      message:
+        "Unsupported value: 'temperature' does not support 0 with this model. Only the default (1) value is supported.",
+      type: 'invalid_request_error',
+      param: 'temperature',
+      code: 'unsupported_value',
+    },
+  });
+  const UNRELATED_400 = JSON.stringify({
+    error: {
+      message: 'Incorrect API key provided: sk-test.',
+      type: 'invalid_request_error',
+      code: 'invalid_api_key',
+    },
+  });
+
+  function bodyOf(m: FetchMock, index: number): Record<string, unknown> {
+    const init = m.mock.calls[index][1] as { body: string };
+    return JSON.parse(init.body) as Record<string, unknown>;
+  }
+
+  function mockSequence(
+    ...responses: Array<{ status: number; text: string; json?: unknown }>
+  ): FetchMock {
+    const m = vi.fn();
+    for (const r of responses) {
+      m.mockResolvedValueOnce({
+        ok: r.status >= 200 && r.status < 300,
+        status: r.status,
+        text: async () => r.text,
+        json: async () => r.json ?? {},
+      });
+    }
+    global.fetch = m as typeof global.fetch;
+    return m;
+  }
+
+  beforeEach(() => {
+    __resetLearnedTemperatureRejections();
+  });
+  afterEach(() => {
+    __resetLearnedTemperatureRejections();
+  });
+
+  it('retries without temperature after a 400 naming the parameter, and succeeds', async () => {
+    const m = mockSequence(
+      { status: 400, text: TEMPERATURE_400 },
+      {
+        status: 200,
+        text: '',
+        json: openAiBody(JSON.stringify(SAMPLE)),
+      }
+    );
+
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'custom',
+          model_name: 'foundry-router',
+          custom_url: 'https://foundry.example.com/chat/completions',
+        }),
+        temperature: 0,
+      })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(m).toHaveBeenCalledTimes(2);
+    expect(bodyOf(m, 0).temperature).toBe(0);
+    expect(bodyOf(m, 1)).not.toHaveProperty('temperature');
+  });
+
+  it('remembers the model, so the next dispatch omits temperature on the first try', async () => {
+    const provider = makeProvider({
+      service_type: 'custom',
+      model_name: 'foundry-router',
+      custom_url: 'https://foundry.example.com/chat/completions',
+    });
+
+    mockSequence(
+      { status: 400, text: TEMPERATURE_400 },
+      { status: 200, text: '', json: openAiBody(JSON.stringify(SAMPLE)) }
+    );
+    await dispatchAiRequest(baseRequest({ provider, temperature: 0 }));
+
+    const second = mockSequence({
+      status: 200,
+      text: '',
+      json: openAiBody(JSON.stringify(SAMPLE)),
+    });
+    const result = await dispatchAiRequest(
+      baseRequest({ provider, temperature: 0 })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(second).toHaveBeenCalledTimes(1);
+    expect(bodyOf(second, 0)).not.toHaveProperty('temperature');
+  });
+
+  it('scopes what it learned to the service_type that taught it', async () => {
+    mockSequence(
+      { status: 400, text: TEMPERATURE_400 },
+      { status: 200, text: '', json: openAiBody(JSON.stringify(SAMPLE)) }
+    );
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'custom',
+          model_name: 'shared-alias',
+          custom_url: 'https://foundry.example.com/chat/completions',
+        }),
+        temperature: 0,
+      })
+    );
+
+    const other = mockSequence({
+      status: 200,
+      text: '',
+      json: openAiBody(JSON.stringify(SAMPLE)),
+    });
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'openai_compatible',
+          model_name: 'shared-alias',
+          custom_url: 'https://other.example.com/v1',
+        }),
+        temperature: 0,
+      })
+    );
+    expect(bodyOf(other, 0).temperature).toBe(0);
+  });
+
+  it('does not retry a 400 that is not about temperature', async () => {
+    const m = mockSequence({ status: 400, text: UNRELATED_400 });
+    const result = await dispatchAiRequest(baseRequest({ temperature: 0 }));
+
+    expect(result.ok).toBe(false);
+    expect(m).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not retry when no temperature was sent in the first place', async () => {
+    const m = mockSequence({ status: 400, text: TEMPERATURE_400 });
+    const result = await dispatchAiRequest(baseRequest());
+
+    expect(result.ok).toBe(false);
+    expect(m).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries at most once, and surfaces the second failure', async () => {
+    const m = mockSequence(
+      { status: 400, text: TEMPERATURE_400 },
+      { status: 400, text: TEMPERATURE_400 }
+    );
+    const result = await dispatchAiRequest(baseRequest({ temperature: 0 }));
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.category).toBe('upstream_error');
+    expect(m).toHaveBeenCalledTimes(2);
+  });
+
+  it('strips temperature from generationConfig on the google family', async () => {
+    const m = mockSequence(
+      { status: 400, text: TEMPERATURE_400 },
+      { status: 200, text: '', json: googleBody(JSON.stringify(SAMPLE)) }
+    );
+
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'google',
+          api_key: 'gem-key',
+          model_name: 'gemini-experimental',
+        }),
+        temperature: 0,
+      })
+    );
+
+    expect(result.ok).toBe(true);
+    const retried = bodyOf(m, 1).generationConfig as Record<string, unknown>;
+    expect(retried).not.toHaveProperty('temperature');
+    // The rest of the config must survive the strip.
+    expect(retried.responseMimeType).toBe('application/json');
+  });
 });

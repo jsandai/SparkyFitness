@@ -105,15 +105,120 @@ const OLLAMA_DEFAULT_TIMEOUT_MS = 120_000;
 const ANTHROPIC_MAX_TOKENS = 8192;
 const ANTHROPIC_VERSION = '2023-06-01';
 
-// Claude Opus 4.7 and later reject `temperature` outright with a 400, and
-// Sonnet 5 rejects non-default values. Sending it to those models fails the
-// request before any work happens, so it is dropped rather than forwarded.
-// Older models (Sonnet 4.6, Haiku 4.5, and earlier) still honor it.
-const ANTHROPIC_MODELS_REJECTING_TEMPERATURE =
-  /^claude-(opus-(4-7|4-8|5)|sonnet-5|fable-5|mythos-5)/;
+// Reasoning-tier models reject a caller-supplied `temperature`: Claude Opus 4.7
+// and later reject it outright with a 400, Sonnet 5 rejects non-default values,
+// and the GPT-5 / o-series families accept only the default (1). Sending it
+// fails the request before any work happens, so it is dropped for those models
+// rather than forwarded. Everything else (Sonnet 4.6, Haiku 4.5, gpt-4o,
+// gpt-4.1, Gemini, Ollama) still honors it.
+//
+// The match is on the model name alone rather than the provider family, because
+// gateways route any vendor's models through an OpenAI-shaped API: OpenRouter
+// serves `anthropic/claude-opus-5` under the `openai` family, so a family-scoped
+// check would miss it.
+//
+// `gpt-5-chat-latest` is carved out because it is the non-reasoning chat
+// variant and does honor temperature. Being wrong in that direction is cheap:
+// the learned-rejection path below picks it up from the provider's first 400.
+const MODELS_REJECTING_TEMPERATURE = [
+  /^claude-(opus-(4-7|4-8|5)|sonnet-5|fable-5|mythos-5)/,
+  /^(o[1-4]($|[-.])|gpt-5(?!-chat))/,
+];
 
-function anthropicAcceptsTemperature(model: string): boolean {
-  return !ANTHROPIC_MODELS_REJECTING_TEMPERATURE.test(model);
+// Gateways namespace models as `vendor/model` (OpenRouter) and model names are
+// entered by hand, so canonicalize before matching.
+function normalizeModelName(model: string): string {
+  const slash = model.lastIndexOf('/');
+  return (slash === -1 ? model : model.slice(slash + 1)).trim().toLowerCase();
+}
+
+// Models the static list above cannot know about — Azure deployment names,
+// gateway aliases, models released after this build — are learned from the
+// provider's own 400 (see isTemperatureRejection), so the wasted round trip
+// happens at most once per provider+model per process. Keyed by service_type so
+// one broken proxy cannot suppress `temperature` for a different provider.
+const LEARNED_TEMPERATURE_REJECTIONS = new Set<string>();
+// The key embeds a user-supplied model name, so bound the set rather than let a
+// caller grow it without limit. Configured providers number in the dozens; the
+// cap is only reached by pathological input, and clearing merely re-learns.
+const MAX_LEARNED_TEMPERATURE_REJECTIONS = 500;
+
+function temperatureKey(serviceType: string, model: string): string {
+  return `${serviceType}|${normalizeModelName(model)}`;
+}
+
+/**
+ * Whether `temperature` may be sent to this provider+model. Exported because
+ * the chat path builds its requests through the AI SDK rather than through
+ * `buildRequest`, and must make the same decision.
+ */
+export function modelAcceptsTemperature(
+  serviceType: string,
+  model: string
+): boolean {
+  if (LEARNED_TEMPERATURE_REJECTIONS.has(temperatureKey(serviceType, model))) {
+    return false;
+  }
+  const normalized = normalizeModelName(model);
+  return !MODELS_REJECTING_TEMPERATURE.some((pattern) =>
+    pattern.test(normalized)
+  );
+}
+
+function rememberTemperatureRejection(
+  serviceType: string,
+  model: string
+): void {
+  if (
+    LEARNED_TEMPERATURE_REJECTIONS.size >= MAX_LEARNED_TEMPERATURE_REJECTIONS
+  ) {
+    LEARNED_TEMPERATURE_REJECTIONS.clear();
+  }
+  LEARNED_TEMPERATURE_REJECTIONS.add(temperatureKey(serviceType, model));
+}
+
+// Exported for tests: process-level learning would otherwise leak between cases.
+export function __resetLearnedTemperatureRejections(): void {
+  LEARNED_TEMPERATURE_REJECTIONS.clear();
+}
+
+// A provider that rejects the parameter says so precisely. OpenAI returns:
+//   {"error":{"message":"Unsupported value: 'temperature' does not support 0
+//    with this model. Only the default (1) value is supported.",
+//    "type":"invalid_request_error","param":"temperature",
+//    "code":"unsupported_value"}}
+// Gateways reword the message and some drop `param`, so the test is "the 400
+// body names temperature and reads like a rejection" rather than an exact
+// shape. A false positive costs one retry without `temperature`, never a
+// failed request.
+const TEMPERATURE_REJECTION_MARKERS =
+  /unsupported|not supported|does not support|invalid_request|invalid value/;
+
+function isTemperatureRejection(body: string | undefined): boolean {
+  if (!body) return false;
+  const text = body.toLowerCase();
+  return (
+    text.includes('temperature') && TEMPERATURE_REJECTION_MARKERS.test(text)
+  );
+}
+
+// Remove `temperature` from an already-built body, wherever that family puts
+// it. Returns false when there was none to remove, which makes the retry a
+// no-op rather than a duplicate identical request.
+function stripTemperature(
+  built: BuiltRequest,
+  family: ProviderFamily
+): boolean {
+  const body = built.body as Record<string, unknown>;
+  const container =
+    family === 'google'
+      ? (body.generationConfig as Record<string, unknown> | undefined)
+      : family === 'ollama'
+        ? (body.options as Record<string, unknown> | undefined)
+        : body;
+  if (!container || container.temperature === undefined) return false;
+  delete container.temperature;
+  return true;
 }
 const DEFAULT_SCHEMA_NAME = 'structured_output';
 const MAX_DETAIL_BODY_CHARS = 500;
@@ -566,7 +671,7 @@ function buildAnthropicRequest(ctx: BuildContext): BuiltRequest {
     max_tokens: ANTHROPIC_MAX_TOKENS,
     messages: [{ role: 'user', content }],
   };
-  if (ctx.temperature !== undefined && anthropicAcceptsTemperature(ctx.model)) {
+  if (ctx.temperature !== undefined) {
     body.temperature = ctx.temperature;
   }
   if (ctx.jsonSchema) {
@@ -805,7 +910,12 @@ function extractResponse(
   }
 }
 
-type HttpOutcome = { data: unknown } | { error: DispatchResult };
+// `rawBody` is the untruncated error body, kept alongside the normalized error
+// so dispatch can inspect *why* a request failed (see isTemperatureRejection)
+// without parsing it back out of the user-facing `detail` string.
+type HttpOutcome =
+  | { data: unknown }
+  | { error: DispatchResult; rawBody?: string };
 
 function timeoutError(): DispatchResult {
   return {
@@ -832,6 +942,7 @@ async function readResponse(response: Response): Promise<HttpOutcome> {
           body ? `: ${truncateBody(body)}` : ''
         }`,
       },
+      rawBody: body,
     };
   }
   try {
@@ -1085,16 +1196,39 @@ export async function dispatchAiRequest(
       images,
       jsonSchema,
       toolName,
-      temperature: req.temperature,
+      temperature: modelAcceptsTemperature(serviceType, model)
+        ? req.temperature
+        : undefined,
     },
     Boolean(parseJson)
   );
 
   const timeoutMs = resolveTimeout(req, family);
-  const outcome =
+  const send = (): Promise<HttpOutcome> =>
     family === 'ollama'
-      ? await performOllama(built, timeoutMs, networkPolicy)
-      : await performFetch(built, timeoutMs, networkPolicy);
+      ? performOllama(built, timeoutMs, networkPolicy)
+      : performFetch(built, timeoutMs, networkPolicy);
+
+  let outcome = await send();
+
+  // A model the static list doesn't cover still announces the problem clearly:
+  // a 400 naming `temperature`. Drop the parameter, remember the model, and
+  // retry once, so an unrecognized reasoning model degrades to "runs at the
+  // provider default" instead of failing every AI feature outright.
+  if (
+    'error' in outcome &&
+    !outcome.error.ok &&
+    outcome.error.status === 400 &&
+    isTemperatureRejection(outcome.rawBody) &&
+    stripTemperature(built, family)
+  ) {
+    rememberTemperatureRejection(serviceType, model);
+    log(
+      'info',
+      `[providerDispatch] ${serviceType}/${model} rejected 'temperature'; retrying without it and omitting it for this model.`
+    );
+    outcome = await send();
+  }
 
   if ('error' in outcome) {
     return outcome.error;
