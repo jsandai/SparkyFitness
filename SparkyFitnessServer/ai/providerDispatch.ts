@@ -149,13 +149,31 @@ const LEARNED_TEMPERATURE_REJECTIONS = new Set<string>();
 // re-learns.
 const MAX_LEARNED_TEMPERATURE_REJECTIONS = 500;
 
+// Scheme and host are case-insensitive per RFC 3986; path and query are not.
+// Two Azure deployments can differ only as `/DeploymentA` vs `/deploymenta`, so
+// lowercasing the whole URL would collapse them into one rejection key. Only
+// the origin is folded; a trailing slash is dropped so `.../v1` and `.../v1/`
+// stay one endpoint.
+function normalizeEndpoint(customUrl?: string | null): string {
+  const raw = (customUrl ?? '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    const path = url.pathname.replace(/\/+$/, '');
+    return `${url.protocol.toLowerCase()}//${url.host.toLowerCase()}${path}${url.search}`;
+  } catch {
+    // Not parseable as a URL (the outbound policy rejects those elsewhere);
+    // key on the raw value rather than silently merging it with everything.
+    return raw.replace(/\/+$/, '');
+  }
+}
+
 function temperatureKey(
   serviceType: string,
   model: string,
   customUrl?: string | null
 ): string {
-  const endpoint = (customUrl ?? '').trim().toLowerCase().replace(/\/+$/, '');
-  return `${serviceType}|${endpoint}|${normalizeModelName(model)}`;
+  return `${serviceType}|${normalizeEndpoint(customUrl)}|${normalizeModelName(model)}`;
 }
 
 /**

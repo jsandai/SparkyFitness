@@ -1217,8 +1217,11 @@ export function classifyByKeywords(text: string): ChatToolCategorySlug[] {
 async function classifyUserIntent(
   messages: ChatMessage[],
   modelInstance: Parameters<typeof generateText>[0]['model'],
-  serviceType: string,
-  modelName: string,
+  provider: {
+    serviceType: string;
+    modelName: string;
+    customUrl?: string | null;
+  },
   providerOptions?: Record<string, Record<string, JSONValue>>
 ): Promise<ChatToolCategorySlug[]> {
   const lastUserMessage = [...messages]
@@ -1280,7 +1283,11 @@ Your response must contain ONLY the matched domain names as a comma-separated li
       // `temperature: 0` would fail silently: a wasted round trip on every
       // chat turn that misses the keyword classifier, and tool narrowing
       // quietly falling back to the profile default.
-      ...(modelAcceptsTemperature(serviceType, modelName) && {
+      ...(modelAcceptsTemperature(
+        provider.serviceType,
+        provider.modelName,
+        provider.customUrl
+      ) && {
         temperature: 0,
       }),
       maxRetries: 0,
@@ -1384,8 +1391,11 @@ async function processChatMessage(
       activeCategories = await classifyUserIntent(
         messages,
         modelInstance,
-        aiService.service_type,
-        modelName,
+        {
+          serviceType: aiService.service_type,
+          modelName,
+          customUrl: aiService.custom_url,
+        },
         buildChatProviderOptions(
           aiService.service_type,
           authenticatedUserId,
@@ -1924,8 +1934,11 @@ async function processChatMessageStream(
       activeCategories = await classifyUserIntent(
         messages,
         modelInstance,
-        aiService.service_type,
-        modelName,
+        {
+          serviceType: aiService.service_type,
+          modelName,
+          customUrl: aiService.custom_url,
+        },
         buildChatProviderOptions(
           aiService.service_type,
           authenticatedUserId,

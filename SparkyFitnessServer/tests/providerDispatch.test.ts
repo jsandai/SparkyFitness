@@ -1876,6 +1876,45 @@ describe('dispatchAiRequest — learned temperature rejection', () => {
     expect(bodyOf(again, 0)).not.toHaveProperty('temperature');
   });
 
+  // Scheme and host are case-insensitive, path and query are not. Two Azure
+  // deployments can differ only by path casing, so folding the whole URL would
+  // let one suppress temperature for the other.
+  it('keeps endpoints that differ only by path casing distinct', async () => {
+    mockSequence(
+      { status: 400, text: TEMPERATURE_400 },
+      { status: 200, text: '', json: openAiBody(JSON.stringify(SAMPLE)) }
+    );
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'custom',
+          model_name: 'default',
+          custom_url:
+            'https://foundry.example.com/openai/deployments/DeploymentA',
+        }),
+        temperature: 0,
+      })
+    );
+
+    const otherDeployment = mockSequence({
+      status: 200,
+      text: '',
+      json: openAiBody(JSON.stringify(SAMPLE)),
+    });
+    await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({
+          service_type: 'custom',
+          model_name: 'default',
+          custom_url:
+            'https://foundry.example.com/openai/deployments/deploymenta',
+        }),
+        temperature: 0,
+      })
+    );
+    expect(bodyOf(otherDeployment, 0).temperature).toBe(0);
+  });
+
   it('does not retry a 400 that is not about temperature', async () => {
     const m = mockSequence({ status: 400, text: UNRELATED_400 });
     const result = await dispatchAiRequest(baseRequest({ temperature: 0 }));
