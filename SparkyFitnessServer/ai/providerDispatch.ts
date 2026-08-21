@@ -118,12 +118,28 @@ const ANTHROPIC_VERSION = '2023-06-01';
 // serves `anthropic/claude-opus-5` under the `openai` family, so a family-scoped
 // check would miss it.
 //
-// `gpt-5-chat-latest` is carved out because it is the non-reasoning chat
-// variant and does honor temperature. Being wrong in that direction is cheap:
-// the learned-rejection path below picks it up from the provider's first 400.
+// The OpenAI patterns enumerate rather than match `gpt-5` as a prefix, because
+// the behaviour is NOT monotonic across the family. Verified against the live
+// API on 2026-08-20 with `temperature: 0` on /v1/chat/completions:
+//
+//   reject: gpt-5, gpt-5-mini, gpt-5-nano, gpt-5-2025-08-07, gpt-5.5,
+//           gpt-5.6-sol, gpt-5.6-luna, gpt-5.6-terra, o1, o3, o3-mini, o4-mini
+//   accept: gpt-5.1, gpt-5.2, gpt-5.4, gpt-5.4-mini, gpt-5.4-nano,
+//           gpt-5.4-mini-2026-03-17
+//
+// A `gpt-5`-prefix match would therefore strip `temperature` from five current
+// models that honor it, which is the worse way to be wrong: the request still
+// succeeds, silently, at the provider default, and nothing ever corrects it.
+// Being wrong the other way costs one 400 and one retry, after which the
+// learned-rejection path below remembers the model. So the rule is: list only
+// what is known to reject, and let the backstop catch the rest.
 const MODELS_REJECTING_TEMPERATURE = [
   /^claude-(opus-(4-7|4-8|5)|sonnet-5|fable-5|mythos-5)/,
-  /^(o[1-4]($|[-.])|gpt-5(?!-chat))/,
+  /^o[1-4]($|[-.])/,
+  // `gpt-5`, `gpt-5-mini`, `gpt-5-nano` and their dated snapshots — but not
+  // `gpt-5.1`, and not `gpt-5-chat-latest`.
+  /^gpt-5(-(mini|nano|pro))?($|-\d{4}-\d{2}-\d{2})/,
+  /^gpt-5\.(5|6)($|[-.])/,
 ];
 
 // Gateways namespace models as `vendor/model` (OpenRouter) and model names are
@@ -273,8 +289,12 @@ const TEMPERATURE_PARAM_FIELD = /"param"\s*:\s*"temperature"/;
 // `[^.{}]` keeps a match inside one sentence and one JSON object, so a message
 // about some other field cannot reach across a `},{` boundary to a temperature
 // mentioned elsewhere in the body.
+// `incompatible` is not hypothetical: OpenAI's own `gpt-5-search-api` answers
+// with `Model incompatible request argument supplied: temperature` and no
+// `param` field at all, a third wording alongside `unsupported_value` (gpt-5)
+// and `unsupported_parameter` (o1/o3-mini). Verified live on 2026-08-20.
 const REJECTION_PHRASE =
-  'unsupported|not supported|does not support|invalid value|unrecognized|not permitted|unexpected';
+  'unsupported|not supported|does not support|invalid value|unrecognized|not permitted|unexpected|incompatible';
 const TEMPERATURE_NEAR_REJECTION = new RegExp(
   `(?:${REJECTION_PHRASE})[^.{}]{0,80}temperature` +
     `|temperature[^.{}]{0,80}(?:${REJECTION_PHRASE}|only the default)`

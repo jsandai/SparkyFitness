@@ -1568,11 +1568,19 @@ describe('reasoning-model temperature compatibility', () => {
   // GPT-5 and the o-series accept only the default temperature (1); any
   // caller-supplied value is a 400 before the model does any work. Reported as
   // "GPT-5.6 is not supported" — the Test button dispatches with temperature 0.
+  // Every name below returned a 400 from the live OpenAI API on 2026-08-20 when
+  // sent `temperature: 0`; the accept-list in the next block returned 200. The
+  // family is not monotonic, so this is a recorded observation, not a pattern.
   it.each([
     'gpt-5',
     'gpt-5-mini',
+    'gpt-5-nano',
+    'gpt-5-2025-08-07',
+    'gpt-5-mini-2025-08-07',
+    'gpt-5.5',
     'gpt-5.6-sol',
     'gpt-5.6-luna',
+    'gpt-5.6-terra',
     'o1',
     'o1-mini',
     'o3',
@@ -1592,11 +1600,23 @@ describe('reasoning-model temperature compatibility', () => {
 
   // gpt-5-chat-latest is the non-reasoning variant; o200k-base is a tokenizer
   // name, included to pin that the o-series pattern needs a real boundary.
+  // gpt-5.1 through gpt-5.4 accept temperature — verified against the live API
+  // on 2026-08-20. A `gpt-5` prefix match would silently drop it for all of
+  // them, and the request would still succeed at the provider default, so
+  // nothing would ever surface the loss. gpt-5-chat-latest is the non-reasoning
+  // variant; o200k-base is a tokenizer name, included to pin that the o-series
+  // pattern needs a real boundary.
   it.each([
     'gpt-4o',
     'gpt-4o-mini',
     'gpt-4.1',
     'gpt-4.1-mini',
+    'gpt-5.1',
+    'gpt-5.2',
+    'gpt-5.4',
+    'gpt-5.4-mini',
+    'gpt-5.4-nano',
+    'gpt-5.4-mini-2026-03-17',
     'gpt-5-chat-latest',
     'o200k-base',
   ])('still sends temperature for %s', async (model) => {
@@ -2012,6 +2032,70 @@ describe('dispatchAiRequest — learned temperature rejection', () => {
 
     expect(result.ok).toBe(false);
     expect(m).toHaveBeenCalledTimes(1);
+  });
+
+  // The o-series wording differs from the gpt-5 wording. Captured verbatim from
+  // the live API on 2026-08-20 (o1 and o3-mini return this; gpt-5 and o3 return
+  // the `unsupported_value` form in TEMPERATURE_400).
+  it('retries on the o-series `unsupported_parameter` wording', async () => {
+    const m = mockSequence(
+      {
+        status: 400,
+        text: JSON.stringify({
+          error: {
+            message:
+              "Unsupported parameter: 'temperature' is not supported with this model.",
+            type: 'invalid_request_error',
+            param: 'temperature',
+            code: 'unsupported_parameter',
+          },
+        }),
+      },
+      { status: 200, text: '', json: openAiBody(JSON.stringify(SAMPLE)) }
+    );
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({ model_name: 'gpt-4o-mini' }),
+        temperature: 0,
+      })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(m).toHaveBeenCalledTimes(2);
+    expect(bodyOf(m, 1)).not.toHaveProperty('temperature');
+  });
+
+  // A third real wording, and the one the static list cannot help with:
+  // `gpt-5-search-api` is not a reasoning-model name, rejects temperature
+  // anyway, and returns no `param` field. Captured verbatim from the live API
+  // on 2026-08-20. This is the case the reactive backstop exists for.
+  it('retries on the `Model incompatible request argument` wording', async () => {
+    const m = mockSequence(
+      {
+        status: 400,
+        text: JSON.stringify({
+          error: {
+            message:
+              'Model incompatible request argument supplied: temperature',
+            type: 'invalid_request_error',
+            param: null,
+            code: null,
+          },
+        }),
+      },
+      { status: 200, text: '', json: openAiBody(JSON.stringify(SAMPLE)) }
+    );
+    const result = await dispatchAiRequest(
+      baseRequest({
+        provider: makeProvider({ model_name: 'gpt-5-search-api' }),
+        temperature: 0,
+      })
+    );
+
+    expect(result.ok).toBe(true);
+    expect(m).toHaveBeenCalledTimes(2);
+    expect(bodyOf(m, 0).temperature).toBe(0);
+    expect(bodyOf(m, 1)).not.toHaveProperty('temperature');
   });
 
   // Gateways reword the message and drop `param`; the retry still has to fire.
