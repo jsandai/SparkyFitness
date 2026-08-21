@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import undici from 'undici';
 import convert from 'heic-convert';
 import { log } from '../config/logging.js';
@@ -105,15 +106,232 @@ const OLLAMA_DEFAULT_TIMEOUT_MS = 120_000;
 const ANTHROPIC_MAX_TOKENS = 8192;
 const ANTHROPIC_VERSION = '2023-06-01';
 
-// Claude Opus 4.7 and later reject `temperature` outright with a 400, and
-// Sonnet 5 rejects non-default values. Sending it to those models fails the
-// request before any work happens, so it is dropped rather than forwarded.
-// Older models (Sonnet 4.6, Haiku 4.5, and earlier) still honor it.
-const ANTHROPIC_MODELS_REJECTING_TEMPERATURE =
-  /^claude-(opus-(4-7|4-8|5)|sonnet-5|fable-5|mythos-5)/;
+// Reasoning-tier models reject a caller-supplied `temperature`: Claude Opus 4.7
+// and later reject it outright with a 400, Sonnet 5 rejects non-default values,
+// and the GPT-5 / o-series families accept only the default (1). Sending it
+// fails the request before any work happens, so it is dropped for those models
+// rather than forwarded. Everything else (Sonnet 4.6, Haiku 4.5, gpt-4o,
+// gpt-4.1, Gemini, Ollama) still honors it.
+//
+// The match is on the model name alone rather than the provider family, because
+// gateways route any vendor's models through an OpenAI-shaped API: OpenRouter
+// serves `anthropic/claude-opus-5` under the `openai` family, so a family-scoped
+// check would miss it.
+//
+// The OpenAI patterns enumerate rather than match `gpt-5` as a prefix, because
+// the behaviour is NOT monotonic across the family. Verified against the live
+// API on 2026-08-20 with `temperature: 0` on /v1/chat/completions:
+//
+//   reject: gpt-5, gpt-5-mini, gpt-5-nano, gpt-5-2025-08-07, gpt-5.5,
+//           gpt-5.6-sol, gpt-5.6-luna, gpt-5.6-terra, o1, o3, o3-mini, o4-mini
+//   accept: gpt-5.1, gpt-5.2, gpt-5.4, gpt-5.4-mini, gpt-5.4-nano,
+//           gpt-5.4-mini-2026-03-17
+//
+// A `gpt-5`-prefix match would therefore strip `temperature` from five current
+// models that honor it, which is the worse way to be wrong: the request still
+// succeeds, silently, at the provider default, and nothing ever corrects it.
+// Being wrong the other way costs one 400 and one retry, after which the
+// learned-rejection path below remembers the model. So the rule is: list only
+// what is known to reject, and let the backstop catch the rest.
+const MODELS_REJECTING_TEMPERATURE = [
+  /^claude-(opus-(4-7|4-8|5)|sonnet-5|fable-5|mythos-5)/,
+  /^o[1-4]($|[-.])/,
+  // `gpt-5`, `gpt-5-mini`, `gpt-5-nano` and their dated snapshots — but not
+  // `gpt-5.1`, and not `gpt-5-chat-latest`.
+  /^gpt-5(-(mini|nano|pro))?($|-\d{4}-\d{2}-\d{2})/,
+  /^gpt-5\.(5|6)($|[-.])/,
+];
 
-function anthropicAcceptsTemperature(model: string): boolean {
-  return !ANTHROPIC_MODELS_REJECTING_TEMPERATURE.test(model);
+// Gateways namespace models as `vendor/model` (OpenRouter) and model names are
+// entered by hand, so canonicalize before matching.
+function normalizeModelName(model: string): string {
+  const slash = model.lastIndexOf('/');
+  return (slash === -1 ? model : model.slice(slash + 1)).trim().toLowerCase();
+}
+
+// Models the static list above cannot know about — Azure deployment names,
+// gateway aliases, models released after this build — are learned from the
+// provider's own 400 (see isTemperatureRejection) once a retry without the
+// parameter has actually succeeded, so the wasted round trip happens at most
+// once per endpoint+model per process.
+//
+// The key must identify the *endpoint*, not just the service_type: every
+// user-defined backend shares the value 'custom' or 'openai_compatible', so
+// keying on the type alone would let one user's proxy rejecting a generic alias
+// like 'default' silently strip temperature from every other custom backend
+// using that same alias — including ones that support it.
+const LEARNED_TEMPERATURE_REJECTIONS = new Set<string>();
+// The key embeds a user-supplied model name and URL, so bound the set rather
+// than let a caller grow it without limit. Configured providers number in the
+// dozens; the cap is only reached by pathological input, and clearing merely
+// re-learns.
+const MAX_LEARNED_TEMPERATURE_REJECTIONS = 500;
+
+// Scheme and host are case-insensitive per RFC 3986; path and query are not.
+// Two Azure deployments can differ only as `/DeploymentA` vs `/deploymenta`, so
+// lowercasing the whole URL would collapse them into one rejection key. Only
+// the origin is folded; a trailing slash is dropped so `.../v1` and `.../v1/`
+// stay one endpoint.
+function normalizeEndpoint(customUrl?: string | null): string {
+  const raw = (customUrl ?? '').trim();
+  if (!raw) return '';
+  try {
+    const url = new URL(raw);
+    const path = url.pathname.replace(/\/+$/, '');
+    return `${url.protocol.toLowerCase()}//${url.host.toLowerCase()}${path}${url.search}`;
+  } catch {
+    // Not parseable as a URL (the outbound policy rejects those elsewhere);
+    // key on the raw value rather than silently merging it with everything.
+    return raw.replace(/\/+$/, '');
+  }
+}
+
+// One gateway URL can front different models per credential: a LiteLLM or
+// Azure-style router maps the alias `default` to whatever the caller's key is
+// entitled to. Without the credential in the key, one tenant learning that
+// `default` rejects temperature would strip it from another tenant whose
+// `default` supports it. Hashed rather than stored: this key is only ever
+// compared, never read back, and must not put an API key in memory a second
+// time (or anywhere it could reach a log line).
+function credentialFingerprint(apiKey?: string | null): string {
+  const raw = (apiKey ?? '').trim();
+  if (!raw) return '';
+  return createHash('sha256').update(raw).digest('hex').slice(0, 16);
+}
+
+/**
+ * The parts of a provider config that identify *which* backend a learned
+ * temperature rejection belongs to. Grouped rather than passed as three more
+ * positional strings, which would be trivial to transpose at a call site.
+ */
+export interface TemperatureProviderIdentity {
+  serviceType: string;
+  customUrl?: string | null;
+  apiKey?: string | null;
+}
+
+function temperatureKey(
+  identity: TemperatureProviderIdentity,
+  model: string
+): string {
+  return [
+    identity.serviceType,
+    normalizeEndpoint(identity.customUrl),
+    credentialFingerprint(identity.apiKey),
+    normalizeModelName(model),
+  ].join('|');
+}
+
+/**
+ * Whether `temperature` may be sent to this provider+model. Exported because
+ * the chat path builds its requests through the AI SDK rather than through
+ * `buildRequest`, and must make the same decision.
+ *
+ * Pass the whole identity: `customUrl` and `apiKey` distinguish the
+ * user-supplied backends, which all share one service_type.
+ */
+export function modelAcceptsTemperature(
+  identity: TemperatureProviderIdentity,
+  model: string
+): boolean {
+  if (LEARNED_TEMPERATURE_REJECTIONS.has(temperatureKey(identity, model))) {
+    return false;
+  }
+  const normalized = normalizeModelName(model);
+  return !MODELS_REJECTING_TEMPERATURE.some((pattern) =>
+    pattern.test(normalized)
+  );
+}
+
+function rememberTemperatureRejection(
+  identity: TemperatureProviderIdentity,
+  model: string
+): void {
+  if (
+    LEARNED_TEMPERATURE_REJECTIONS.size >= MAX_LEARNED_TEMPERATURE_REJECTIONS
+  ) {
+    LEARNED_TEMPERATURE_REJECTIONS.clear();
+  }
+  LEARNED_TEMPERATURE_REJECTIONS.add(temperatureKey(identity, model));
+}
+
+// Exported for tests: process-level learning would otherwise leak between cases.
+export function __resetLearnedTemperatureRejections(): void {
+  LEARNED_TEMPERATURE_REJECTIONS.clear();
+}
+
+// A provider that rejects the parameter says so precisely. OpenAI returns:
+//   {"error":{"message":"Unsupported value: 'temperature' does not support 0
+//    with this model. Only the default (1) value is supported.",
+//    "type":"invalid_request_error","param":"temperature",
+//    "code":"unsupported_value"}}
+// Gateways reword the message and some drop `param`, so the test cannot be an
+// exact shape match. It still has to be narrow: a match strips `temperature`
+// and (once the retry proves it) remembers that for the rest of the process,
+// so a false positive silently disables the parameter on an endpoint that
+// supports it.
+//
+// Two things keep it narrow:
+//   1. `"param":"temperature"` is accepted outright — that field exists to
+//      name the offending parameter, so it is unambiguous.
+//   2. Otherwise the word must sit *next to* a rejection phrase. A generic
+//      400 that merely happens to carry the word does not qualify; in
+//      particular `invalid_request` alone is not a marker, because
+//      `"type":"invalid_request_error"` rides along on every OpenAI 400.
+const TEMPERATURE_PARAM_FIELD = /"param"\s*:\s*"temperature"/;
+
+// The phrase list has to span vendors, because a model outside the static list
+// above can appear on any of them. Anthropic does not use OpenAI's wording or
+// its `param` field; it surfaces schema validation directly:
+//   {"type":"error","error":{"type":"invalid_request_error",
+//    "message":"temperature: Extra inputs are not permitted"}}
+//
+// `[^.{}]` keeps a match inside one sentence and one JSON object, so a message
+// about some other field cannot reach across a `},{` boundary to a temperature
+// mentioned elsewhere in the body.
+// `incompatible` is not hypothetical: OpenAI's own `gpt-5-search-api` answers
+// with `Model incompatible request argument supplied: temperature` and no
+// `param` field at all, a third wording alongside `unsupported_value` (gpt-5)
+// and `unsupported_parameter` (o1/o3-mini). Verified live on 2026-08-20.
+const REJECTION_PHRASE =
+  'unsupported|not supported|does not support|invalid value|unrecognized|not permitted|unexpected|incompatible';
+const TEMPERATURE_NEAR_REJECTION = new RegExp(
+  `(?:${REJECTION_PHRASE})[^.{}]{0,80}temperature` +
+    `|temperature[^.{}]{0,80}(?:${REJECTION_PHRASE}|only the default)`
+);
+
+// Local OpenAI-compatible servers (vLLM, LM Studio, llama.cpp) often echo the
+// offending request back inside the error body, and that echo contains
+// `"temperature": 0`. Drop those assignments before testing for prose: an
+// echoed value is evidence of what we sent, not of what the server objected to.
+const ECHOED_TEMPERATURE_VALUE = /"temperature"\s*:\s*-?\d+(?:\.\d+)?/g;
+
+function isTemperatureRejection(body: string | undefined): boolean {
+  if (!body) return false;
+  const text = body.toLowerCase();
+  if (TEMPERATURE_PARAM_FIELD.test(text)) return true;
+  return TEMPERATURE_NEAR_REJECTION.test(
+    text.replace(ECHOED_TEMPERATURE_VALUE, '')
+  );
+}
+
+// Remove `temperature` from an already-built body, wherever that family puts
+// it. Returns false when there was none to remove, which makes the retry a
+// no-op rather than a duplicate identical request.
+function stripTemperature(
+  built: BuiltRequest,
+  family: ProviderFamily
+): boolean {
+  const body = built.body as Record<string, unknown>;
+  const container =
+    family === 'google'
+      ? (body.generationConfig as Record<string, unknown> | undefined)
+      : family === 'ollama'
+        ? (body.options as Record<string, unknown> | undefined)
+        : body;
+  if (!container || container.temperature === undefined) return false;
+  delete container.temperature;
+  return true;
 }
 const DEFAULT_SCHEMA_NAME = 'structured_output';
 const MAX_DETAIL_BODY_CHARS = 500;
@@ -566,7 +784,7 @@ function buildAnthropicRequest(ctx: BuildContext): BuiltRequest {
     max_tokens: ANTHROPIC_MAX_TOKENS,
     messages: [{ role: 'user', content }],
   };
-  if (ctx.temperature !== undefined && anthropicAcceptsTemperature(ctx.model)) {
+  if (ctx.temperature !== undefined) {
     body.temperature = ctx.temperature;
   }
   if (ctx.jsonSchema) {
@@ -805,7 +1023,12 @@ function extractResponse(
   }
 }
 
-type HttpOutcome = { data: unknown } | { error: DispatchResult };
+// `rawBody` is the untruncated error body, kept alongside the normalized error
+// so dispatch can inspect *why* a request failed (see isTemperatureRejection)
+// without parsing it back out of the user-facing `detail` string.
+type HttpOutcome =
+  | { data: unknown }
+  | { error: DispatchResult; rawBody?: string };
 
 function timeoutError(): DispatchResult {
   return {
@@ -832,6 +1055,7 @@ async function readResponse(response: Response): Promise<HttpOutcome> {
           body ? `: ${truncateBody(body)}` : ''
         }`,
       },
+      rawBody: body,
     };
   }
   try {
@@ -1076,6 +1300,12 @@ export async function dispatchAiRequest(
       : getDefaultModel(serviceType));
 
   const toolName = schemaName ?? DEFAULT_SCHEMA_NAME;
+  const temperatureIdentity: TemperatureProviderIdentity = {
+    serviceType,
+    customUrl: provider.custom_url,
+    apiKey: provider.api_key,
+  };
+
   const built = buildRequest(
     family,
     {
@@ -1085,16 +1315,50 @@ export async function dispatchAiRequest(
       images,
       jsonSchema,
       toolName,
-      temperature: req.temperature,
+      temperature: modelAcceptsTemperature(temperatureIdentity, model)
+        ? req.temperature
+        : undefined,
     },
     Boolean(parseJson)
   );
 
   const timeoutMs = resolveTimeout(req, family);
-  const outcome =
+  const send = (): Promise<HttpOutcome> =>
     family === 'ollama'
-      ? await performOllama(built, timeoutMs, networkPolicy)
-      : await performFetch(built, timeoutMs, networkPolicy);
+      ? performOllama(built, timeoutMs, networkPolicy)
+      : performFetch(built, timeoutMs, networkPolicy);
+
+  let outcome = await send();
+
+  // A model the static list doesn't cover still announces the problem clearly:
+  // a 400 naming `temperature`. Drop the parameter, remember the model, and
+  // retry once, so an unrecognized reasoning model degrades to "runs at the
+  // provider default" instead of failing every AI feature outright.
+  if (
+    'error' in outcome &&
+    !outcome.error.ok &&
+    outcome.error.status === 400 &&
+    isTemperatureRejection(outcome.rawBody) &&
+    stripTemperature(built, family)
+  ) {
+    log(
+      'info',
+      `[providerDispatch] ${serviceType}/${model} looks like it rejected 'temperature'; retrying without it.`
+    );
+    outcome = await send();
+    // Only learn from a rejection the retry actually cured. If the second
+    // request fails too, `temperature` was not the problem — recording it
+    // would strip a supported parameter from every later call to this
+    // endpoint for the life of the process. Not learning costs one extra
+    // round trip next time, which is the safe direction to be wrong in.
+    if (!('error' in outcome)) {
+      rememberTemperatureRejection(temperatureIdentity, model);
+      log(
+        'info',
+        `[providerDispatch] ${serviceType}/${model} succeeded without 'temperature'; omitting it for this model.`
+      );
+    }
+  }
 
   if ('error' in outcome) {
     return outcome.error;

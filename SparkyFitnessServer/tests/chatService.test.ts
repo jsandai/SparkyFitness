@@ -655,6 +655,59 @@ describe('chatService', () => {
       expect(model.doGenerateCalls[0].temperature).toBe(0.2);
     });
 
+    // The core profile is gated on the service using a user-supplied URL, not
+    // on the model being local, so a GPT-5/o-series model reached through
+    // `openai_compatible` or `custom` lands on the core path too. Those models
+    // accept only the default temperature, so the 0.2 above must be withheld
+    // or the whole chat turn 400s.
+    it('withholds the core-profile temperature from a reasoning model on a user-supplied URL', async () => {
+      vi.mocked(chatRepository.getAiServiceSettingForBackend).mockResolvedValue(
+        {
+          ...aiServiceSetting,
+          service_type: 'openai_compatible',
+          custom_url: 'https://foundry.example.com/v1',
+          model_name: 'gpt-5.6-sol',
+          chat_tool_profile: 'core',
+        }
+      );
+      const model = scriptModel([textStep('Hi there!')]);
+
+      await chatService.processChatMessage(
+        [{ role: 'user', content: 'hello' }],
+        'svc-1',
+        activeUserId,
+        actorUserId
+      );
+
+      expect(log).toHaveBeenCalledWith(
+        'info',
+        expect.stringMatching(/profile=core/)
+      );
+      expect(model.doGenerateCalls[0].temperature).toBeUndefined();
+    });
+
+    it('still applies the core-profile temperature to a non-reasoning model on a user-supplied URL', async () => {
+      vi.mocked(chatRepository.getAiServiceSettingForBackend).mockResolvedValue(
+        {
+          ...aiServiceSetting,
+          service_type: 'openai_compatible',
+          custom_url: 'https://vllm.example.com/v1',
+          model_name: 'qwen2.5-7b-instruct',
+          chat_tool_profile: 'core',
+        }
+      );
+      const model = scriptModel([textStep('Hi there!')]);
+
+      await chatService.processChatMessage(
+        [{ role: 'user', content: 'hello' }],
+        'svc-1',
+        activeUserId,
+        actorUserId
+      );
+
+      expect(model.doGenerateCalls[0].temperature).toBe(0.2);
+    });
+
     it('ships the full tool set for an Ollama service left on the full profile', async () => {
       vi.mocked(chatRepository.getAiServiceSettingForBackend).mockResolvedValue(
         {

@@ -5,6 +5,7 @@ import { log } from '../config/logging.js';
 import { getDefaultModel, getOpenAiCompatibleBaseUrl } from '../ai/config.js';
 import {
   dispatchAiRequest,
+  modelAcceptsTemperature,
   requiresApiKey,
   type DispatchErrorCategory,
   type ProviderConfig,
@@ -1216,6 +1217,12 @@ export function classifyByKeywords(text: string): ChatToolCategorySlug[] {
 async function classifyUserIntent(
   messages: ChatMessage[],
   modelInstance: Parameters<typeof generateText>[0]['model'],
+  provider: {
+    serviceType: string;
+    modelName: string;
+    customUrl?: string | null;
+    apiKey?: string | null;
+  },
   providerOptions?: Record<string, Record<string, JSONValue>>
 ): Promise<ChatToolCategorySlug[]> {
   const lastUserMessage = [...messages]
@@ -1271,7 +1278,22 @@ Your response must contain ONLY the matched domain names as a comma-separated li
       system: classificationPrompt,
       messages: contextMessages,
       providerOptions,
-      temperature: 0,
+      // Determinism matters here (the output is parsed as a category list), but
+      // reasoning-tier models reject a caller-supplied temperature outright.
+      // This call is inside a try/catch, so on those models an unguarded
+      // `temperature: 0` would fail silently: a wasted round trip on every
+      // chat turn that misses the keyword classifier, and tool narrowing
+      // quietly falling back to the profile default.
+      ...(modelAcceptsTemperature(
+        {
+          serviceType: provider.serviceType,
+          customUrl: provider.customUrl,
+          apiKey: provider.apiKey,
+        },
+        provider.modelName
+      ) && {
+        temperature: 0,
+      }),
       maxRetries: 0,
       abortSignal: AbortSignal.timeout(10000), // 10s timeout to prevent hanging the chat turn
     });
@@ -1373,6 +1395,12 @@ async function processChatMessage(
       activeCategories = await classifyUserIntent(
         messages,
         modelInstance,
+        {
+          serviceType: aiService.service_type,
+          modelName,
+          customUrl: aiService.custom_url,
+          apiKey: aiService.api_key,
+        },
         buildChatProviderOptions(
           aiService.service_type,
           authenticatedUserId,
@@ -1426,11 +1454,22 @@ async function processChatMessage(
       activeTools: activeToolNames,
       prepareStep,
       providerOptions: chatProviderOptions,
-      // Low temperature only for small local models (core profile); cloud and
-      // full-profile Ollama keep provider defaults.
-      ...(toolProfile === 'core' && {
-        temperature: CORE_PROFILE_CHAT_TEMPERATURE,
-      }),
+      // Low temperature only for core-profile backends; cloud and full-profile
+      // Ollama keep provider defaults. The core profile is gated on a
+      // user-supplied URL, not on the model being local, so a GPT-5/o-series
+      // model reached through `custom`/`openai_compatible` lands here too and
+      // would 400 on the temperature.
+      ...(toolProfile === 'core' &&
+        modelAcceptsTemperature(
+          {
+            serviceType: aiService.service_type,
+            customUrl: aiService.custom_url,
+            apiKey: aiService.api_key,
+          },
+          modelName
+        ) && {
+          temperature: CORE_PROFILE_CHAT_TEMPERATURE,
+        }),
       // Tighter retry ceiling for cache-less core-profile backends, where every
       // retry re-processes the full prefix.
       stopWhen: buildChatStopConditions(toolProfile),
@@ -1903,6 +1942,12 @@ async function processChatMessageStream(
       activeCategories = await classifyUserIntent(
         messages,
         modelInstance,
+        {
+          serviceType: aiService.service_type,
+          modelName,
+          customUrl: aiService.custom_url,
+          apiKey: aiService.api_key,
+        },
         buildChatProviderOptions(
           aiService.service_type,
           authenticatedUserId,
@@ -1959,11 +2004,22 @@ async function processChatMessageStream(
       activeTools: activeToolNames,
       prepareStep,
       providerOptions: chatProviderOptions,
-      // Low temperature only for small local models (core profile); cloud and
-      // full-profile Ollama keep provider defaults.
-      ...(toolProfile === 'core' && {
-        temperature: CORE_PROFILE_CHAT_TEMPERATURE,
-      }),
+      // Low temperature only for core-profile backends; cloud and full-profile
+      // Ollama keep provider defaults. The core profile is gated on a
+      // user-supplied URL, not on the model being local, so a GPT-5/o-series
+      // model reached through `custom`/`openai_compatible` lands here too and
+      // would 400 on the temperature.
+      ...(toolProfile === 'core' &&
+        modelAcceptsTemperature(
+          {
+            serviceType: aiService.service_type,
+            customUrl: aiService.custom_url,
+            apiKey: aiService.api_key,
+          },
+          modelName
+        ) && {
+          temperature: CORE_PROFILE_CHAT_TEMPERATURE,
+        }),
       // Tighter retry ceiling for cache-less core-profile backends, where every
       // retry re-processes the full prefix.
       stopWhen: buildChatStopConditions(toolProfile),
