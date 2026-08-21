@@ -2895,7 +2895,7 @@
       "newFood": "New Food",
       "newMeal": "New Meal",
       "show": "Show",
-      "allSources": "All Sources"
+      "allProviders": "All Providers"
     },
     "accessibility": {
       "moreFiltered": "More options, filtered to {{filter}}",
@@ -2904,14 +2904,14 @@
       "scanFood": "Scan Food",
       "searchingFoods": "Searching saved foods",
       "searchingFoodsMeals": "Searching saved foods and meals",
-      "sourceChange": "Source {{source}}, tap to change",
       "providerError": "{{provider}}, could not load, tap to retry",
       "providerNoResults": "{{provider}}, no results",
       "favorite": "Favorite",
       "viewPhoto": "View photo",
       "verifiedFood": "Verified food",
       "providerExpand_one": "{{provider}}, {{count}} result, tap to {{action}}",
-      "providerExpand_other": "{{provider}}, {{count}} results, tap to {{action}}"
+      "providerExpand_other": "{{provider}}, {{count}} results, tap to {{action}}",
+      "providerChange": "Provider {{provider}}, tap to change"
     },
     "errors": {
       "detailsUnavailable": "Details unavailable",
@@ -2924,8 +2924,8 @@
       "yourFoods": "Your Foods",
       "yourMeals": "Your Meals",
       "topMatches": "Top Matches",
-      "bySource": "By Source",
-      "onlineResults": "Online Results"
+      "onlineResults": "Online Results",
+      "byProvider": "By Provider"
     },
     "search": {
       "placeholder": "Search foods..."
@@ -3084,7 +3084,7 @@
       "description": "When enabled, carbohydrate summaries display net carbs (total carbs − fiber), and a Total Carbs row is added in nutrient breakdowns."
     },
     "foodSource": {
-      "title": "Default Food Source",
+      "title": "Default Food Provider",
       "pickerTitle": "Search Provider",
       "firstAvailable": "First available",
       "description": "Used when searching for foods by name."

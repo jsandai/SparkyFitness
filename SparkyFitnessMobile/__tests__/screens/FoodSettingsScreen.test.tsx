@@ -6,13 +6,25 @@ import FoodSettingsScreen from '../../src/screens/FoodSettingsScreen';
 import * as preferencesApi from '../../src/services/api/preferencesApi';
 import { preferencesQueryKey } from '../../src/hooks/queryKeys';
 
+// Mutable so a test can put the screen in a multi-provider state, the only state
+// where the aggregated "All Providers" option is offered.
+let mockProviders: { id: string; provider_name: string }[] = [];
 jest.mock('../../src/hooks/useExternalProviders', () => ({
-  useExternalProviders: () => ({ providers: [], isLoading: false }),
+  useExternalProviders: () => ({ providers: mockProviders, isLoading: false }),
 }));
 
+// Records every picker's props so a test can assert the value the screen
+// resolved and drive onSelect, which the plain View stub cannot do.
+const mockPickerProps: Record<string, any>[] = [];
 jest.mock('../../src/components/BottomSheetPicker', () => {
   const { View } = require('react-native');
-  return { __esModule: true, default: () => <View testID="bottom-sheet-picker" /> };
+  return {
+    __esModule: true,
+    default: (props: Record<string, any>) => {
+      mockPickerProps.push(props);
+      return <View testID="bottom-sheet-picker" />;
+    },
+  };
 });
 
 jest.mock('../../src/components/Icon', () => {
@@ -52,9 +64,14 @@ function renderScreen(initialPrefs: any) {
   };
 }
 
+const foodProviderPicker = () =>
+  mockPickerProps.find((p) => p.title === 'Search Provider');
+
 describe('FoodSettingsScreen', () => {
   beforeEach(() => {
     jest.clearAllMocks();
+    mockProviders = [];
+    mockPickerProps.length = 0;
   });
 
   it('renders the renamed "Food Settings" header', () => {
@@ -110,4 +127,92 @@ describe('FoodSettingsScreen', () => {
     expect(queryByText(/Set target start times for your meal categories/i)).toBeNull();
   });
 
+  describe('default food provider: "All Providers"', () => {
+    const twoProviders = [
+      { id: 'prov-usda', provider_name: 'USDA' },
+      { id: 'prov-off', provider_name: 'OpenFoodFacts' },
+    ];
+
+    it('offers All Providers above one provider', () => {
+      mockProviders = twoProviders;
+      renderScreen({});
+      expect(foodProviderPicker()?.options[0]).toEqual({
+        label: 'All Providers',
+        value: '__all__',
+      });
+    });
+
+    it('does not offer All Providers with a single provider', () => {
+      mockProviders = [twoProviders[0]];
+      renderScreen({});
+      expect(
+        foodProviderPicker()?.options.map((o: { value: string }) => o.value),
+      ).toEqual(['prov-usda']);
+    });
+
+    it('shows the sentinel as the selected value when the preference is on', () => {
+      mockProviders = twoProviders;
+      renderScreen({
+        food_search_all_providers_default: true,
+        default_food_data_provider_id: 'prov-usda',
+      });
+      expect(foodProviderPicker()?.value).toBe('__all__');
+    });
+
+    it('degrades to the stored provider when only one provider is left', () => {
+      // The option is hidden below two providers, so surfacing the sentinel
+      // would leave the picker showing its placeholder.
+      mockProviders = [twoProviders[0]];
+      renderScreen({
+        food_search_all_providers_default: true,
+        default_food_data_provider_id: 'prov-usda',
+      });
+      expect(foodProviderPicker()?.value).toBe('prov-usda');
+    });
+
+    it('falls back to the placeholder when the stored provider is no longer active', () => {
+      // The one remaining provider is not the stored one, so the stored id has
+      // no matching option. Web resolves the stored id against the active
+      // providers and yields an empty value here; passing the dangling id
+      // straight through would rest correctness on the picker's lookup miss.
+      mockProviders = [twoProviders[1]];
+      renderScreen({
+        food_search_all_providers_default: true,
+        default_food_data_provider_id: 'prov-usda',
+      });
+      expect(foodProviderPicker()?.value).toBe('');
+    });
+
+    it('persists the flag without writing the sentinel into the uuid column', async () => {
+      // default_food_data_provider_id is a uuid; sending '__all__' would fail
+      // the column's input conversion, and keeping the stored provider is what
+      // lets turning All Providers back off restore it.
+      const spy = jest
+        .spyOn(preferencesApi, 'updatePreferences')
+        .mockResolvedValue({} as any);
+      mockProviders = twoProviders;
+      renderScreen({ default_food_data_provider_id: 'prov-usda' });
+      foodProviderPicker()?.onSelect('__all__');
+      await waitFor(() => {
+        expect(spy).toHaveBeenCalledWith({
+          food_search_all_providers_default: true,
+        });
+      });
+    });
+
+    it('clears the flag when a real provider is picked', async () => {
+      const spy = jest
+        .spyOn(preferencesApi, 'updatePreferences')
+        .mockResolvedValue({} as any);
+      mockProviders = twoProviders;
+      renderScreen({ food_search_all_providers_default: true });
+      foodProviderPicker()?.onSelect('prov-off');
+      await waitFor(() => {
+        expect(spy).toHaveBeenCalledWith({
+          default_food_data_provider_id: 'prov-off',
+          food_search_all_providers_default: false,
+        });
+      });
+    });
+  });
 });
