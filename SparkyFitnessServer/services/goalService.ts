@@ -16,31 +16,12 @@ import {
   todayInZone,
   CALORIE_CALCULATION_CONSTANTS,
   computeCalorieTarget,
+  macroGramsFromPercentages,
   ACTIVITY_MULTIPLIERS,
 } from '@workspace/shared';
 import customNutrientService from './customNutrientService.js';
 import { DEFAULT_GOALS } from '../constants/goals.js';
 import { Goals } from '../types/goals.js';
-// Helper function to calculate grams from percentages
-function calculateGramsFromPercentages(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  calories: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  protein_percentage: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  carbs_percentage: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  fat_percentage: any,
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  dietary_fiber?: any
-) {
-  const fiber = Number(dietary_fiber) || 0;
-  const adjustedCalories = Math.max(0, (Number(calories) || 0) - fiber * 2);
-  const protein_grams = (adjustedCalories * (protein_percentage / 100)) / 4;
-  const carbs_grams = (adjustedCalories * (carbs_percentage / 100)) / 4;
-  const fat_grams = (adjustedCalories * (fat_percentage / 100)) / 9;
-  return { protein_grams, carbs_grams, fat_grams };
-}
 
 async function getUserGoalsForRange(
   userId: string,
@@ -326,7 +307,7 @@ async function getUserGoalsForRange(
       processedGoals.fat_percentage !== null
     ) {
       const { protein_grams, carbs_grams, fat_grams } =
-        calculateGramsFromPercentages(
+        macroGramsFromPercentages(
           processedGoals.calories,
           processedGoals.protein_percentage,
           processedGoals.carbs_percentage,
@@ -449,7 +430,7 @@ async function manageGoalTimeline(authenticatedUserId: string, goalData: any) {
       !isNaN(p_fat_percentage)
     ) {
       const { protein_grams, carbs_grams, fat_grams } =
-        calculateGramsFromPercentages(
+        macroGramsFromPercentages(
           p_calories,
           p_protein_percentage,
           p_carbs_percentage,

@@ -18,6 +18,7 @@ import { CENTRAL_NUTRIENT_CONFIG } from '@/constants/nutrients';
 import { WaterAndExerciseFields } from './WaterAndExerciseFields';
 import { NutrientInput } from './NutrientInput';
 import { usePreferences } from '@/contexts/PreferencesContext';
+import { macroGramsForNutrient } from '@workspace/shared';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '@/hooks/useAuth';
 import {
@@ -39,17 +40,6 @@ interface GoalPresetDialogProps {
   preset: GoalPreset | null;
   visibleNutrients: string[];
 }
-
-const calculateGrams = (
-  calories: number,
-  percentage: number,
-  nutrient: 'protein' | 'carbs' | 'fat',
-  dietaryFiber: number = 0
-) => {
-  const factor = nutrient === 'fat' ? 9 : 4;
-  const adjustedCalories = Math.max(0, calories - dietaryFiber * 2);
-  return Math.round((adjustedCalories * (percentage / 100)) / factor);
-};
 
 export const GoalPresetDialog = ({
   open,
@@ -129,17 +119,23 @@ export const GoalPresetDialog = ({
     const toSave = { ...formData };
 
     if (macroInputType === 'percentages') {
-      const cal = toSave.calories;
-      const fiber = toSave.dietary_fiber || 0;
-      const adjustedCal = Math.max(0, cal - fiber * 2);
-      toSave.protein = Math.round(
-        (adjustedCal * (toSave.protein_percentage || 0)) / 100 / 4
+      toSave.protein = macroGramsForNutrient(
+        toSave.calories,
+        toSave.protein_percentage || 0,
+        'protein',
+        toSave.dietary_fiber
       );
-      toSave.carbs = Math.round(
-        (adjustedCal * (toSave.carbs_percentage || 0)) / 100 / 4
+      toSave.carbs = macroGramsForNutrient(
+        toSave.calories,
+        toSave.carbs_percentage || 0,
+        'carbs',
+        toSave.dietary_fiber
       );
-      toSave.fat = Math.round(
-        (adjustedCal * (toSave.fat_percentage || 0)) / 100 / 9
+      toSave.fat = macroGramsForNutrient(
+        toSave.calories,
+        toSave.fat_percentage || 0,
+        'fat',
+        toSave.dietary_fiber
       );
     } else {
       toSave.protein_percentage = null;
@@ -288,7 +284,7 @@ export const GoalPresetDialog = ({
                 <div className="mt-3 p-3 bg-muted/50 rounded-md text-sm text-muted-foreground grid grid-cols-1 sm:grid-cols-3 gap-2 text-center sm:text-left">
                   <div>
                     <span className="font-semibold">Protein:</span> ≈{' '}
-                    {calculateGrams(
+                    {macroGramsForNutrient(
                       formData.calories,
                       formData.protein_percentage || 0,
                       'protein',
@@ -298,7 +294,7 @@ export const GoalPresetDialog = ({
                   </div>
                   <div>
                     <span className="font-semibold">Carbs:</span> ≈{' '}
-                    {calculateGrams(
+                    {macroGramsForNutrient(
                       formData.calories,
                       formData.carbs_percentage || 0,
                       'carbs',
@@ -308,7 +304,7 @@ export const GoalPresetDialog = ({
                   </div>
                   <div>
                     <span className="font-semibold">Fat:</span> ≈{' '}
-                    {calculateGrams(
+                    {macroGramsForNutrient(
                       formData.calories,
                       formData.fat_percentage || 0,
                       'fat',

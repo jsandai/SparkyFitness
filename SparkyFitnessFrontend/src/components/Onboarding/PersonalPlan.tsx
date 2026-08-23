@@ -14,7 +14,10 @@ import { useSaveGoalsMutation } from '@/hooks/Goals/useGoals';
 import { calculateBasePlan } from '@/utils/nutritionCalculations';
 import { usePreferences } from '@/contexts/PreferencesContext';
 import type { ActivityLevel } from '@/contexts/PreferencesContext';
-import { goalModeFromPrimaryGoal } from '@workspace/shared';
+import {
+  goalModeFromPrimaryGoal,
+  macroPercentageFromGrams,
+} from '@workspace/shared';
 import { useTranslation } from 'react-i18next';
 import { useSubmitOnboarding } from '@/hooks/Onboarding/useOnboarding';
 import { format } from 'date-fns';
@@ -319,23 +322,27 @@ const PersonalPlan = ({
           'kcal'
         );
 
-        const fiber = editedPlan.dietary_fiber || 0;
-        const macroCalories = Math.max(0, storedCalories - fiber * 2);
         const newGoals: ExpandedGoals = {
           ...editedPlan,
           calories: storedCalories,
-          protein_percentage:
-            macroCalories > 0
-              ? Math.round(((editedPlan.protein * 4) / macroCalories) * 100)
-              : 0,
-          carbs_percentage:
-            macroCalories > 0
-              ? Math.round(((editedPlan.carbs * 4) / macroCalories) * 100)
-              : 0,
-          fat_percentage:
-            macroCalories > 0
-              ? Math.round(((editedPlan.fat * 9) / macroCalories) * 100)
-              : 0,
+          protein_percentage: macroPercentageFromGrams(
+            storedCalories,
+            editedPlan.protein,
+            'protein',
+            editedPlan.dietary_fiber
+          ),
+          carbs_percentage: macroPercentageFromGrams(
+            storedCalories,
+            editedPlan.carbs,
+            'carbs',
+            editedPlan.dietary_fiber
+          ),
+          fat_percentage: macroPercentageFromGrams(
+            storedCalories,
+            editedPlan.fat,
+            'fat',
+            editedPlan.dietary_fiber
+          ),
           dietary_fiber: editedPlan.dietary_fiber,
           water_goal_ml: editedPlan.water_goal_ml,
           target_exercise_duration_minutes:

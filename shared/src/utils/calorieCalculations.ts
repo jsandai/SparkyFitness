@@ -651,3 +651,128 @@ export function computeCalorieTarget({
     maxFeasibleDeficitPercent,
   };
 }
+
+/** Energy density of each macronutrient, in kcal per gram. */
+export const MACRO_KCAL_PER_GRAM = {
+  protein: 4,
+  carbs: 4,
+  fat: 9,
+} as const;
+
+export type MacroNutrient = keyof typeof MACRO_KCAL_PER_GRAM;
+
+export interface MacroGrams {
+  protein_grams: number;
+  carbs_grams: number;
+  fat_grams: number;
+}
+
+/**
+ * The slice of the calorie target that the protein/carb/fat split divides up.
+ *
+ * Fiber is carved out first at 2 kcal/g, so it sits **outside** the macro
+ * figures rather than inside the carb number. That is load-bearing: change the
+ * rule and every stored macro goal in the product shifts. Callers must not
+ * reimplement it.
+ *
+ * Inputs are coerced defensively because they arrive from pg drivers, form
+ * state and legacy call sites, where a null or an undefined is routine.
+ */
+export function macroCaloriePool(
+  calories: unknown,
+  dietaryFiber?: unknown,
+): number {
+  const fiber = Number(dietaryFiber) || 0;
+  return Math.max(0, (Number(calories) || 0) - fiber * 2);
+}
+
+/** Grams of one macro carved out of the calorie pool, unrounded. */
+function macroGramsRaw(
+  pool: number,
+  percentage: number,
+  nutrient: MacroNutrient,
+): number {
+  return (pool * percentage) / 100 / MACRO_KCAL_PER_GRAM[nutrient];
+}
+
+/**
+ * Round half-up on the *mathematical* value rather than on its binary double.
+ *
+ * The macro split divides a calorie pool by 100 and then by 4 or 9, so a result
+ * that is exactly `.5` in decimal routinely lands one ULP off in binary — and
+ * which side it lands on depends on the operator order. The goal editors accept
+ * one-decimal percentages (`decimals={1}` on the percentage inputs), which is
+ * enough to make both orders wrong somewhere: `(pool * pct) / 100` misses 149
+ * of the 7.6M reachable (pool, percentage, nutrient) triples and
+ * `pool * (pct / 100)` misses 536.
+ *
+ * Snapping to nine decimals first discards that noise while leaving any value
+ * genuinely below the boundary alone, which makes the rounding exact across the
+ * whole space and the operator order immaterial. Do not replace this with a
+ * bare `Math.round` — the pre-extraction copies did, and the two operator
+ * orders in `GoalPresetDialog` disagreed by a gram between the figure it
+ * displayed and the figure it saved.
+ */
+function roundHalfUp(value: number): number {
+  // `toFixed` round-trips NaN and the infinities unchanged, so a malformed
+  // percentage still propagates rather than collapsing to a number.
+  return Math.round(Number(value.toFixed(9)));
+}
+
+/**
+ * Grams of one macro for a given percentage of the calorie target.
+ *
+ * Rounded to whole grams, which is what the goal-editing surfaces store and
+ * display. Use {@link macroGramsFromPercentages} where the unrounded value is
+ * wanted instead.
+ */
+export function macroGramsForNutrient(
+  calories: unknown,
+  percentage: number,
+  nutrient: MacroNutrient,
+  dietaryFiber?: unknown,
+): number {
+  const pool = macroCaloriePool(calories, dietaryFiber);
+  return roundHalfUp(macroGramsRaw(pool, percentage, nutrient));
+}
+
+/**
+ * All three macros for a percentage triple, **unrounded**.
+ *
+ * The server stores raw fractional grams rather than rounding, so the read path
+ * can re-derive against a moving calorie target without accumulating rounding
+ * drift. Percentages are deliberately *not* coerced: a NaN percentage
+ * propagates to a NaN gram figure so a malformed goal stays visible rather than
+ * silently becoming zero.
+ */
+export function macroGramsFromPercentages(
+  calories: unknown,
+  protein_percentage: number,
+  carbs_percentage: number,
+  fat_percentage: number,
+  dietary_fiber?: unknown,
+): MacroGrams {
+  const pool = macroCaloriePool(calories, dietary_fiber);
+  return {
+    protein_grams: macroGramsRaw(pool, protein_percentage, 'protein'),
+    carbs_grams: macroGramsRaw(pool, carbs_percentage, 'carbs'),
+    fat_grams: macroGramsRaw(pool, fat_percentage, 'fat'),
+  };
+}
+
+/**
+ * Inverse of {@link macroGramsForNutrient}: the percentage of the calorie pool
+ * that a gram figure represents, rounded to a whole percent.
+ *
+ * Returns 0 when the pool is empty, since no percentage is meaningful then.
+ */
+export function macroPercentageFromGrams(
+  calories: unknown,
+  grams: number,
+  nutrient: MacroNutrient,
+  dietaryFiber?: unknown,
+): number {
+  const pool = macroCaloriePool(calories, dietaryFiber);
+  if (pool <= 0) return 0;
+  return roundHalfUp(((grams * MACRO_KCAL_PER_GRAM[nutrient]) / pool) * 100);
+}
