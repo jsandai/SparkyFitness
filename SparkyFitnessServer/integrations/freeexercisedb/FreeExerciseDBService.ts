@@ -9,6 +9,8 @@ const EXERCISES_PATH = 'exercises'; // No leading slash for API
 // Initialize cache for GitHub API responses (e.g., 1 hour TTL)
 const githubCache = new NodeCache({ stdTTL: 3600 });
 const DATASET_TTL_MS = 60 * 60 * 1000;
+// Bound a stalled shared download so it cannot block every exercise search indefinitely.
+const DATASET_REQUEST_TIMEOUT_MS = 15 * 1000;
 // Avoid hammering GitHub and making every search wait during an upstream outage.
 const STALE_RETRY_INTERVAL_MS = 5 * 60 * 1000;
 
@@ -90,7 +92,9 @@ class FreeExerciseDBService {
     if (!exercisesDatasetPromise) {
       const exercisesJsonUrl = `${GITHUB_RAW_BASE_URL}/dist/exercises.json`;
       const currentPromise = axios
-        .get<FreeExercise[]>(exercisesJsonUrl)
+        .get<FreeExercise[]>(exercisesJsonUrl, {
+          timeout: DATASET_REQUEST_TIMEOUT_MS,
+        })
         .then((response) => {
           if (exercisesDatasetPromise === currentPromise) {
             dataset = { data: response.data, fetchedAt: Date.now() };

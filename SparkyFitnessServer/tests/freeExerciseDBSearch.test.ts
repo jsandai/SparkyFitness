@@ -89,6 +89,17 @@ describe('FreeExerciseDBService search', () => {
     expect(requestedUrl).not.toContain('api.github.com');
   });
 
+  it('configures a timeout for the dataset request', async () => {
+    vi.mocked(axios.get).mockResolvedValue({ data: [] });
+
+    await freeExerciseDBService.searchExercises('lunge');
+
+    expect(axios.get).toHaveBeenCalledWith(
+      'https://raw.githubusercontent.com/yuhonas/free-exercise-db/main/dist/exercises.json',
+      { timeout: 15_000 }
+    );
+  });
+
   it('shares one cold-cache download across concurrent searches', async () => {
     vi.mocked(axios.get).mockResolvedValue({
       data: [
@@ -163,6 +174,31 @@ describe('FreeExerciseDBService search', () => {
       exercises: [{ name: 'Barbell Lunge' }],
       totalCount: 1,
     });
+    expect(axios.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('serves stale data after a timeout without retrying inside the interval', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    vi.mocked(axios.get).mockResolvedValue({
+      data: [{ name: 'Barbell Lunge' }],
+    });
+    await freeExerciseDBService.searchExercises('lunge');
+    vi.advanceTimersByTime(3_600_001);
+    vi.mocked(axios.get).mockRejectedValue(
+      Object.assign(new Error('timeout of 15000ms exceeded'), {
+        code: 'ECONNABORTED',
+      })
+    );
+
+    const staleResult = await freeExerciseDBService.searchExercises('barbell');
+    const retryResult = await freeExerciseDBService.searchExercises('lunge');
+
+    expect(staleResult).toEqual({
+      exercises: [{ name: 'Barbell Lunge' }],
+      totalCount: 1,
+    });
+    expect(retryResult).toEqual(staleResult);
     expect(axios.get).toHaveBeenCalledTimes(2);
   });
 
