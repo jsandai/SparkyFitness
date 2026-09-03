@@ -8,7 +8,9 @@ const GITHUB_RAW_BASE_URL =
 const EXERCISES_PATH = 'exercises'; // No leading slash for API
 // Initialize cache for GitHub API responses (e.g., 1 hour TTL)
 const githubCache = new NodeCache({ stdTTL: 3600 });
-const EXERCISES_DATASET_CACHE_KEY = 'exercises_dataset';
+const DATASET_TTL_MS = 60 * 60 * 1000;
+// Avoid hammering GitHub and making every search wait during an upstream outage.
+const STALE_RETRY_INTERVAL_MS = 5 * 60 * 1000;
 
 interface FreeExercise {
   name: string;
@@ -17,8 +19,14 @@ interface FreeExercise {
   secondaryMuscles?: string[];
 }
 
+interface DatasetHolder {
+  data: FreeExercise[];
+  fetchedAt: number;
+}
+
+let dataset: DatasetHolder | null = null;
 let exercisesDatasetPromise: Promise<FreeExercise[]> | null = null;
-let staleExercisesDataset: FreeExercise[] | null = null;
+let lastDatasetFetchFailureAt: number | null = null;
 
 class FreeExerciseDBService {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -64,29 +72,55 @@ class FreeExerciseDBService {
     }
   }
   async getAllExercises(): Promise<FreeExercise[]> {
-    const cachedExercises = githubCache.get<FreeExercise[]>(
-      EXERCISES_DATASET_CACHE_KEY
-    );
-    if (cachedExercises) {
-      return cachedExercises;
+    const now = Date.now();
+    if (dataset && now - dataset.fetchedAt < DATASET_TTL_MS) {
+      return dataset.data;
+    }
+    if (
+      dataset &&
+      lastDatasetFetchFailureAt !== null &&
+      now - lastDatasetFetchFailureAt < STALE_RETRY_INTERVAL_MS
+    ) {
+      log(
+        'warn',
+        `[FreeExerciseDBService] Serving stale exercise dataset after a refresh failure; age: ${now - dataset.fetchedAt}ms`
+      );
+      return dataset.data;
     }
     if (!exercisesDatasetPromise) {
-      exercisesDatasetPromise = (async () => {
-        try {
-          const exercisesJsonUrl = `${GITHUB_RAW_BASE_URL}/dist/exercises.json`;
-          const response = await axios.get<FreeExercise[]>(exercisesJsonUrl);
-          staleExercisesDataset = response.data;
-          githubCache.set(EXERCISES_DATASET_CACHE_KEY, response.data);
+      const exercisesJsonUrl = `${GITHUB_RAW_BASE_URL}/dist/exercises.json`;
+      const currentPromise = axios
+        .get<FreeExercise[]>(exercisesJsonUrl)
+        .then((response) => {
+          if (exercisesDatasetPromise === currentPromise) {
+            dataset = { data: response.data, fetchedAt: Date.now() };
+            lastDatasetFetchFailureAt = null;
+          }
           return response.data;
-        } catch (error) {
-          if (staleExercisesDataset) {
-            return staleExercisesDataset;
+        })
+        .catch((error: unknown) => {
+          if (exercisesDatasetPromise === currentPromise) {
+            lastDatasetFetchFailureAt = Date.now();
+          }
+          if (dataset) {
+            const age = Date.now() - dataset.fetchedAt;
+            if (age >= DATASET_TTL_MS) {
+              log(
+                'warn',
+                `[FreeExerciseDBService] Serving stale exercise dataset after a refresh failure; age: ${age}ms`,
+                error instanceof Error ? error.message : error
+              );
+            }
+            return dataset.data;
           }
           throw error;
-        } finally {
-          exercisesDatasetPromise = null;
-        }
-      })();
+        })
+        .finally(() => {
+          if (exercisesDatasetPromise === currentPromise) {
+            exercisesDatasetPromise = null;
+          }
+        });
+      exercisesDatasetPromise = currentPromise;
     }
     return exercisesDatasetPromise;
   }
@@ -159,8 +193,9 @@ class FreeExerciseDBService {
 
 export function resetFreeExerciseDBCache() {
   githubCache.flushAll();
+  dataset = null;
   exercisesDatasetPromise = null;
-  staleExercisesDataset = null;
+  lastDatasetFetchFailureAt = null;
 }
 
 const freeExerciseDBService = new FreeExerciseDBService();

@@ -68,8 +68,12 @@ describe('FreeExerciseDBService search', () => {
     });
 
     await freeExerciseDBService.searchExercises('lunge');
-    await freeExerciseDBService.searchExercises('curl');
+    const curlResult = await freeExerciseDBService.searchExercises('curl');
 
+    expect(curlResult).toEqual({
+      exercises: [{ name: 'Dumbbell Curl' }],
+      totalCount: 1,
+    });
     expect(axios.get).toHaveBeenCalledTimes(1);
   });
 
@@ -94,13 +98,19 @@ describe('FreeExerciseDBService search', () => {
       ],
     });
 
-    await Promise.all([
+    const results = await Promise.all([
       freeExerciseDBService.searchExercises('lunge'),
       freeExerciseDBService.searchExercises('curl'),
       freeExerciseDBService.searchExercises('row'),
       freeExerciseDBService.searchExercises('barbell'),
     ]);
 
+    expect(results).toEqual([
+      { exercises: [{ name: 'Barbell Lunge' }], totalCount: 1 },
+      { exercises: [{ name: 'Dumbbell Curl' }], totalCount: 1 },
+      { exercises: [{ name: 'Cable Row' }], totalCount: 1 },
+      { exercises: [{ name: 'Barbell Lunge' }], totalCount: 1 },
+    ]);
     expect(axios.get).toHaveBeenCalledTimes(1);
   });
 
@@ -121,5 +131,50 @@ describe('FreeExerciseDBService search', () => {
       totalCount: 1,
     });
     expect(axios.get).toHaveBeenCalledTimes(2);
+
+    vi.mocked(axios.get).mockResolvedValue({
+      data: [{ name: 'Dumbbell Curl' }],
+    });
+    vi.advanceTimersByTime(300_001);
+
+    const refreshedResult = await freeExerciseDBService.searchExercises('curl');
+
+    expect(refreshedResult).toEqual({
+      exercises: [{ name: 'Dumbbell Curl' }],
+      totalCount: 1,
+    });
+    expect(axios.get).toHaveBeenCalledTimes(3);
+  });
+
+  it('serves stale data without refetching during the retry interval', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    vi.mocked(axios.get).mockResolvedValue({
+      data: [{ name: 'Barbell Lunge' }],
+    });
+    await freeExerciseDBService.searchExercises('lunge');
+    vi.advanceTimersByTime(3_600_001);
+    vi.mocked(axios.get).mockRejectedValue(new Error('network error'));
+
+    await freeExerciseDBService.searchExercises('barbell');
+    const retryResult = await freeExerciseDBService.searchExercises('lunge');
+
+    expect(retryResult).toEqual({
+      exercises: [{ name: 'Barbell Lunge' }],
+      totalCount: 1,
+    });
+    expect(axios.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('returns the same dataset array reference for consecutive reads', async () => {
+    vi.mocked(axios.get).mockResolvedValue({
+      data: [{ name: 'Barbell Lunge' }],
+    });
+
+    const first = await freeExerciseDBService.getAllExercises();
+    const second = await freeExerciseDBService.getAllExercises();
+
+    expect(second).toBe(first);
+    expect(axios.get).toHaveBeenCalledTimes(1);
   });
 });
