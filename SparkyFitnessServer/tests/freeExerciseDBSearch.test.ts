@@ -125,6 +125,39 @@ describe('FreeExerciseDBService search', () => {
     expect(axios.get).toHaveBeenCalledTimes(1);
   });
 
+  it('does not retry a failed cold-start download during the retry interval', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    vi.mocked(axios.get).mockRejectedValue(new Error('network error'));
+
+    const firstResult = await freeExerciseDBService.searchExercises('lunge');
+    const retryResult = await freeExerciseDBService.searchExercises('curl');
+
+    expect(firstResult).toEqual({ exercises: [], totalCount: 0 });
+    expect(retryResult).toEqual({ exercises: [], totalCount: 0 });
+    expect(axios.get).toHaveBeenCalledTimes(1);
+  });
+
+  it('retries a failed cold-start download after the retry interval', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    vi.mocked(axios.get).mockRejectedValueOnce(new Error('network error'));
+
+    await freeExerciseDBService.searchExercises('lunge');
+    vi.advanceTimersByTime(300_001);
+    vi.mocked(axios.get).mockResolvedValue({
+      data: [{ name: 'Dumbbell Curl' }],
+    });
+
+    const retryResult = await freeExerciseDBService.searchExercises('curl');
+
+    expect(retryResult).toEqual({
+      exercises: [{ name: 'Dumbbell Curl' }],
+      totalCount: 1,
+    });
+    expect(axios.get).toHaveBeenCalledTimes(2);
+  });
+
   it('serves the last good dataset when a refetch fails', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));

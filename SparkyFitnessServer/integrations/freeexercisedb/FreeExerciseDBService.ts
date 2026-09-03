@@ -79,15 +79,21 @@ class FreeExerciseDBService {
       return dataset.data;
     }
     if (
-      dataset &&
       lastDatasetFetchFailureAt !== null &&
       now - lastDatasetFetchFailureAt < STALE_RETRY_INTERVAL_MS
     ) {
+      if (dataset) {
+        log(
+          'warn',
+          `[FreeExerciseDBService] Serving stale exercise dataset after a refresh failure; age: ${now - dataset.fetchedAt}ms`
+        );
+        return dataset.data;
+      }
       log(
         'warn',
-        `[FreeExerciseDBService] Serving stale exercise dataset after a refresh failure; age: ${now - dataset.fetchedAt}ms`
+        '[FreeExerciseDBService] Skipping exercise dataset fetch during retry interval after a cold-start failure'
       );
-      return dataset.data;
+      throw new Error('Exercise dataset fetch retry interval is active');
     }
     if (!exercisesDatasetPromise) {
       const exercisesJsonUrl = `${GITHUB_RAW_BASE_URL}/dist/exercises.json`;
