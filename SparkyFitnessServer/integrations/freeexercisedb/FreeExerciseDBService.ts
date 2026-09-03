@@ -26,6 +26,19 @@ interface DatasetHolder {
   fetchedAt: number;
 }
 
+function isExerciseDataset(value: unknown): value is FreeExercise[] {
+  if (!Array.isArray(value)) return false;
+  if (value.length === 0) return true;
+
+  const firstExercise: unknown = value[0];
+  return (
+    typeof firstExercise === 'object' &&
+    firstExercise !== null &&
+    'name' in firstExercise &&
+    typeof firstExercise.name === 'string'
+  );
+}
+
 let dataset: DatasetHolder | null = null;
 let exercisesDatasetPromise: Promise<FreeExercise[]> | null = null;
 let lastDatasetFetchFailureAt: number | null = null;
@@ -98,10 +111,17 @@ class FreeExerciseDBService {
     if (!exercisesDatasetPromise) {
       const exercisesJsonUrl = `${GITHUB_RAW_BASE_URL}/dist/exercises.json`;
       const currentPromise = axios
-        .get<FreeExercise[]>(exercisesJsonUrl, {
+        .get<unknown>(exercisesJsonUrl, {
           timeout: DATASET_REQUEST_TIMEOUT_MS,
         })
         .then((response) => {
+          if (!isExerciseDataset(response.data)) {
+            log(
+              'warn',
+              '[FreeExerciseDBService] Rejected invalid exercise dataset response'
+            );
+            throw new Error('Invalid exercise dataset response');
+          }
           if (exercisesDatasetPromise === currentPromise) {
             dataset = { data: response.data, fetchedAt: Date.now() };
             lastDatasetFetchFailureAt = null;

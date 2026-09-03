@@ -138,6 +138,29 @@ describe('FreeExerciseDBService search', () => {
     expect(axios.get).toHaveBeenCalledTimes(1);
   });
 
+  it('retries after rejecting an invalid cold-start dataset response', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    vi.mocked(axios.get).mockResolvedValueOnce({
+      data: '<html>Proxy interstitial</html>',
+    });
+
+    const firstResult = await freeExerciseDBService.searchExercises('lunge');
+    vi.advanceTimersByTime(300_001);
+    vi.mocked(axios.get).mockResolvedValue({
+      data: [{ name: 'Dumbbell Curl' }],
+    });
+
+    const retryResult = await freeExerciseDBService.searchExercises('curl');
+
+    expect(firstResult).toEqual({ exercises: [], totalCount: 0 });
+    expect(retryResult).toEqual({
+      exercises: [{ name: 'Dumbbell Curl' }],
+      totalCount: 1,
+    });
+    expect(axios.get).toHaveBeenCalledTimes(2);
+  });
+
   it('retries a failed cold-start download after the retry interval', async () => {
     vi.useFakeTimers();
     vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
@@ -188,6 +211,27 @@ describe('FreeExerciseDBService search', () => {
       totalCount: 1,
     });
     expect(axios.get).toHaveBeenCalledTimes(3);
+  });
+
+  it('serves the last good dataset when a refresh response is invalid', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-01-01T00:00:00Z'));
+    vi.mocked(axios.get).mockResolvedValue({
+      data: [{ name: 'Barbell Lunge' }],
+    });
+    await freeExerciseDBService.searchExercises('lunge');
+    vi.advanceTimersByTime(3_600_001);
+    vi.mocked(axios.get).mockResolvedValue({
+      data: { message: 'Rate limit exceeded' },
+    });
+
+    const result = await freeExerciseDBService.searchExercises('barbell');
+
+    expect(result).toEqual({
+      exercises: [{ name: 'Barbell Lunge' }],
+      totalCount: 1,
+    });
+    expect(axios.get).toHaveBeenCalledTimes(2);
   });
 
   it('serves stale data without refetching during the retry interval', async () => {
